@@ -12,8 +12,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.kwebmn.dvripcam.dvrip.DvripClient
+import com.kwebmn.dvripcam.video.AudioOut
+import com.kwebmn.dvripcam.video.G711
 import com.kwebmn.dvripcam.video.H264Decoder
 import com.kwebmn.dvripcam.video.NalExtractor
+import com.kwebmn.dvripcam.video.SofiaDemuxer
 import kotlinx.coroutines.*
 import javax.net.SocketFactory
 
@@ -32,6 +35,14 @@ class LivePlayer(
     private var scope: CoroutineScope? = null
     private var client: DvripClient? = null
     private var decoder: H264Decoder? = null
+    private val audio = AudioOut()
+    @Volatile private var soundOn = false
+
+    /** Включить/выключить звук (звук из потока камеры). */
+    fun setSound(on: Boolean) {
+        soundOn = on
+        if (on) audio.start() else audio.stop()
+    }
 
     fun start(surface: Surface) {
         if (running) return
@@ -58,7 +69,11 @@ class LivePlayer(
                 onStatus("Live • $streamType")
                 val dec = H264Decoder(surface, onError = { onStatus(it) }, onVideoSize = onVideoSize); decoder = dec
                 val extractor = NalExtractor { nal -> dec.submitNal(nal) }
-                c.runMonitor(streamType, onPayload = { extractor.feed(it) }, isRunning = { running })
+                val demux = SofiaDemuxer(
+                    onVideo = { extractor.feed(it) },
+                    onAudio = { payload, fmt -> if (soundOn) audio.write(G711.toPcm16(payload, fmt)) },
+                )
+                c.runMonitor(streamType, onPayload = { demux.feed(it) }, isRunning = { running })
             } catch (e: Exception) {
                 if (running) onStatus("Поток прерван: ${e.message}")
             } finally {
@@ -70,6 +85,7 @@ class LivePlayer(
 
     fun stop() {
         running = false
+        runCatching { audio.stop() }
         runCatching { decoder?.stop() }
         runCatching { client?.close() }
         scope?.cancel()
@@ -84,6 +100,7 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
 
     // "Extra" = D1 (лёгкий поток), "Main" = 1080p. Смена качества пересоздаёт плеер.
     var stream by rememberSaveable { mutableStateOf("Extra") }
+    var sound by rememberSaveable { mutableStateOf(false) }
     var aspect by remember { mutableStateOf(4f / 3f) }
     val player = remember(stream) {
         LivePlayer(
@@ -92,6 +109,8 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
             onVideoSize = { w, h -> if (h > 0) aspect = w.toFloat() / h },
         ).also { it.streamType = stream }
     }
+    // применяем текущее состояние звука к (пере)созданному плееру
+    LaunchedEffect(player, sound) { player.setSound(sound) }
     DisposableEffect(player) { onDispose { player.stop() } }
 
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -101,6 +120,11 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
             Text(if (stream == "Main") "Live (1080p)" else "Live (D1)",
                 style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.weight(1f))
+            FilterChip(
+                selected = sound,
+                onClick = { sound = !sound },
+                label = { Text(if (sound) "🔊" else "🔈") },
+            )
             FilterChip(
                 selected = stream == "Main",
                 onClick = { stream = if (stream == "Main") "Extra" else "Main" },
