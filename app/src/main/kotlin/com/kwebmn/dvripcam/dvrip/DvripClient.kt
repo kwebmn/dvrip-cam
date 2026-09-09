@@ -8,8 +8,15 @@ import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 
+/** Запись на SD-карте (из OPFileQuery). */
+data class RecordingFile(val name: String, val begin: String, val end: String) {
+    val isAlarm: Boolean get() = name.contains("[A]")
+    val shortName: String get() = name.substringAfterLast('/')
+}
+
 /**
- * Минимальный DVRIP-клиент: соединение, логин (sofia_hash), запрос/ответ config get/set, SystemInfo.
+ * Минимальный DVRIP-клиент: соединение, логин (sofia_hash), запрос/ответ config get/set, SystemInfo,
+ * живой поток (OPMonitor) и плейбэк архива (OPPlayBack).
  * Все сетевые операции — на Dispatchers.IO. Синхронный request/response по одному сокету.
  */
 class DvripClient(
@@ -146,6 +153,51 @@ class DvripClient(
             val (_, body) = recvRaw()
             if (body.isEmpty()) continue
             if (body[0] == '{'.code.toByte()) continue // JSON-контрол, не медиа
+            onPayload(body)
+        }
+    }
+
+    /** Список записей на SD за интервал [begin]..[end] (формат "YYYY-MM-DD HH:MM:SS"). Лимит ~64/запрос. */
+    suspend fun queryFiles(begin: String, end: String): List<RecordingFile> = withContext(Dispatchers.IO) {
+        val q = JSONObject()
+            .put("BeginTime", begin).put("EndTime", end).put("Channel", 0)
+            .put("DriverTypeMask", "0x0000FFFF").put("Event", "*")
+            .put("StreamType", "0x00000000").put("Type", "h264")
+        val resp = request(MessageIds.FILE_QUERY, JSONObject().put("Name", "OPFileQuery").put("OPFileQuery", q))
+        val arr = resp.optJSONArray("OPFileQuery") ?: return@withContext emptyList()
+        (0 until arr.length()).mapNotNull {
+            val o = arr.getJSONObject(it)
+            val name = o.optString("FileName")
+            if (name.isBlank()) null
+            else RecordingFile(name, o.optString("BeginTime"), o.optString("EndTime"))
+        }
+    }
+
+    /**
+     * Плейбэк записи: Claim (1424) -> DownloadStart (1420), медиа приходит (1426) до пакета
+     * нулевой длины (EOF). Payload каждого пакета -> [onPayload].
+     */
+    suspend fun playback(
+        file: String, begin: String, end: String,
+        onPayload: (ByteArray) -> Unit, isRunning: () -> Boolean,
+    ) = withContext(Dispatchers.IO) {
+        fun par() = JSONObject().put("FileName", file).put("PlayMode", "ByName")
+            .put("StreamType", 0).put("Value", 0).put("TransMode", "TCP")
+        request(
+            MessageIds.PLAYBACK_CLAIM,
+            JSONObject().put("Name", "OPPlayBack").put("OPPlayBack",
+                JSONObject().put("Action", "Claim").put("StartTime", begin).put("EndTime", end).put("Parameter", par())),
+        )
+        frame(
+            MessageIds.PLAYBACK_DOWNLOAD_START,
+            JSONObject().put("Name", "OPPlayBack").put("SessionID", sessionHex).put("OPPlayBack",
+                JSONObject().put("Action", "DownloadStart").put("StartTime", begin).put("EndTime", end).put("Parameter", par())),
+        )
+        socket?.soTimeout = 12000
+        while (isRunning()) {
+            val (_, body) = recvRaw()
+            if (body.isEmpty()) break // EOF
+            if (body[0] == '{'.code.toByte()) continue
             onPayload(body)
         }
     }

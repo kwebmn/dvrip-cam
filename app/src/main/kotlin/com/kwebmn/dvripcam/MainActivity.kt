@@ -26,12 +26,22 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    var live by remember { mutableStateOf<LiveTarget?>(null) }
-                    val t = live
-                    if (t == null) {
-                        ConnectScreen(onOpenLive = { h, p, u, pw -> live = LiveTarget(h, p, u, pw) })
-                    } else {
-                        LiveScreen(t.host, t.port, t.user, t.pass) { live = null }
+                    var route by remember { mutableStateOf<Route>(Route.Connect) }
+                    when (val r = route) {
+                        is Route.Connect -> ConnectScreen(
+                            onOpenLive = { h, p, u, pw -> route = Route.Live(h, p, u, pw) },
+                            onOpenArchive = { h, p, u, pw -> route = Route.Archive(h, p, u, pw) },
+                        )
+                        is Route.Live -> LiveScreen(r.host, r.port, r.user, r.pass) { route = Route.Connect }
+                        is Route.Archive -> ArchiveScreen(
+                            r.host, r.port, r.user, r.pass,
+                            onBack = { route = Route.Connect },
+                            onPlay = { f -> route = Route.Playback(r.host, r.port, r.user, r.pass, f) },
+                        )
+                        is Route.Playback -> PlaybackScreen(
+                            r.host, r.port, r.user, r.pass, r.file,
+                            onBack = { route = Route.Archive(r.host, r.port, r.user, r.pass) },
+                        )
                     }
                 }
             }
@@ -39,10 +49,21 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-data class LiveTarget(val host: String, val port: Int, val user: String, val pass: String)
+sealed interface Route {
+    object Connect : Route
+    data class Live(val host: String, val port: Int, val user: String, val pass: String) : Route
+    data class Archive(val host: String, val port: Int, val user: String, val pass: String) : Route
+    data class Playback(
+        val host: String, val port: Int, val user: String, val pass: String,
+        val file: com.kwebmn.dvripcam.dvrip.RecordingFile,
+    ) : Route
+}
 
 @Composable
-private fun ConnectScreen(onOpenLive: (String, Int, String, String) -> Unit) {
+private fun ConnectScreen(
+    onOpenLive: (String, Int, String, String) -> Unit,
+    onOpenArchive: (String, Int, String, String) -> Unit,
+) {
     var host by rememberSaveable { mutableStateOf("192.168.1.10") }
     var port by rememberSaveable { mutableStateOf("34567") }
     var user by rememberSaveable { mutableStateOf("admin") }
@@ -153,6 +174,10 @@ private fun ConnectScreen(onOpenLive: (String, Int, String, String) -> Unit) {
                 onClick = { onOpenLive(host.trim(), port.trim().toIntOrNull() ?: 34567, user.trim(), password) },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("▶ Смотреть Live") }
+            OutlinedButton(
+                onClick = { onOpenArchive(host.trim(), port.trim().toIntOrNull() ?: 34567, user.trim(), password) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("🗂 Архив (SD)") }
         }
 
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
