@@ -48,6 +48,7 @@ private fun ConnectScreen(onOpenLive: (String, Int, String, String) -> Unit) {
     var status by remember { mutableStateOf("Введите данные камеры и нажмите «Подключиться»") }
     var busy by remember { mutableStateOf(false) }
     var canLive by remember { mutableStateOf(false) }
+    var updCheckMsg by remember { mutableStateOf("") }
 
     val activity = androidx.compose.ui.platform.LocalContext.current as ComponentActivity
 
@@ -141,6 +142,30 @@ private fun ConnectScreen(onOpenLive: (String, Int, String, String) -> Unit) {
                 onClick = { onOpenLive(host.trim(), port.trim().toIntOrNull() ?: 34567, user.trim(), password) },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("▶ Смотреть Live") }
+        }
+
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text(
+                "Версия ${com.kwebmn.dvripcam.BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = {
+                updCheckMsg = "Проверяю…"
+                activity.lifecycleScope.launch {
+                    val rel = com.kwebmn.dvripcam.update.Updater.latestRelease()
+                    when {
+                        rel == null -> updCheckMsg = "Не удалось проверить обновления"
+                        com.kwebmn.dvripcam.update.Updater.isNewer(rel.versionName) -> {
+                            update = rel; updCheckMsg = ""
+                        }
+                        else -> updCheckMsg = "У вас последняя версия (${rel.tag})"
+                    }
+                }
+            }) { Text("Проверить обновления") }
+        }
+        if (updCheckMsg.isNotBlank()) {
+            Text(updCheckMsg, style = MaterialTheme.typography.bodySmall)
         }
 
         update?.let { rel ->
