@@ -18,8 +18,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.kwebmn.dvripcam.dvrip.DvripClient
 import com.kwebmn.dvripcam.dvrip.RecordingFile
 import com.kwebmn.dvripcam.video.H264Decoder
+import com.kwebmn.dvripcam.video.Mp4Saver
 import com.kwebmn.dvripcam.video.NalExtractor
+import com.kwebmn.dvripcam.video.SofiaDemuxer
 import kotlinx.coroutines.*
+import java.io.File
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import javax.net.SocketFactory
@@ -137,7 +140,8 @@ private class PlaybackPlayer(
                 onStatus("Воспроизведение…")
                 val dec = H264Decoder(surface, onError = { onStatus(it) }, onVideoSize = onVideoSize); decoder = dec
                 val extractor = NalExtractor { nal -> dec.submitNal(nal) }
-                c.playback(file.name, file.begin, file.end, onPayload = { extractor.feed(it) }, isRunning = { running })
+                val demux = SofiaDemuxer(onVideo = { extractor.feed(it) })
+                c.playback(file.name, file.begin, file.end, onPayload = { demux.feed(it) }, isRunning = { running })
                 if (running) onStatus("Воспроизведение завершено")
             } catch (e: Exception) {
                 if (running) onStatus("Прервано: ${e.message}")
@@ -162,16 +166,53 @@ fun PlaybackScreen(
     val wifiSf = remember { wifiSocketFactory(ctx) }
     var status by remember { mutableStateOf("Готовлюсь…") }
     var aspect by remember { mutableStateOf(4f / 3f) }
+    var saving by remember { mutableStateOf(false) }
+    var saveMsg by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
     val player = remember {
         PlaybackPlayer(host, port, user, pass, wifiSf, file,
             onStatus = { status = it }, onVideoSize = { w, h -> if (h > 0) aspect = w.toFloat() / h })
     }
     DisposableEffect(player) { onDispose { player.stop() } }
 
+    fun download() {
+        if (saving) return
+        saving = true; player.stop(); saveMsg = "Скачиваю…"
+        scope.launch(Dispatchers.IO) {
+            val dir = ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES) ?: ctx.cacheDir
+            val safe = file.begin.replace(Regex("[^0-9]"), "").ifBlank { System.currentTimeMillis().toString() }
+            val out = File(dir, "cam_$safe.mp4")
+            val client = DvripClient(host, port)
+            val saver = Mp4Saver(out)
+            try {
+                if (!client.connectAwait(user, pass, wifiSf) { saveMsg = it }) return@launch
+                val extractor = NalExtractor { nal -> saver.onNal(nal) }
+                val demux = SofiaDemuxer(onVideo = { extractor.feed(it) })
+                var running = true
+                client.playback(file.name, file.begin, file.end,
+                    onPayload = { demux.feed(it); if (saver.frames % 30 == 0L) saveMsg = "Скачиваю… кадров: ${saver.frames}" },
+                    isRunning = { running })
+                running = false
+                val ok = saver.finish()
+                saveMsg = if (ok) "✅ Сохранено: ${out.name} (${saver.frames} кадров)\n${out.absolutePath}"
+                else "Не удалось сохранить: ${saver.error ?: "нет кадров"}"
+            } catch (e: Exception) {
+                runCatching { saver.finish() }
+                saveMsg = "Ошибка скачивания: ${e.message}"
+            } finally {
+                runCatching { client.close() }; saving = false
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = onBack) { Text("← Назад") }
             Text(file.begin, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { download() }, enabled = !saving) {
+                Text(if (saving) "…" else "⬇ MP4")
+            }
         }
         Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
             AndroidView(
@@ -188,5 +229,6 @@ fun PlaybackScreen(
             )
         }
         Text(status, style = MaterialTheme.typography.bodySmall)
+        if (saveMsg.isNotBlank()) Text(saveMsg, style = MaterialTheme.typography.bodySmall)
     }
 }
