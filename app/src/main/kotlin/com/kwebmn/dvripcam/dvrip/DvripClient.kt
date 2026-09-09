@@ -214,7 +214,14 @@ class DvripClient(
      * Использовать НА ОТДЕЛЬНОМ соединении (не на сокете живого потока!).
      * Формат: G711 A-law, 8кГц, 8 бит.
      */
-    suspend fun talkStart(): Boolean = withContext(Dispatchers.IO) {
+    /** Последний сырой ответ на talk Claim — для диагностики. */
+    @Volatile var lastTalkResp: String = ""
+
+    /**
+     * Начать talk-back. Возвращает Ret ответа Claim (100 = успех).
+     * Start (1430) отправляется только при успешном Claim.
+     */
+    suspend fun talkStart(): Int = withContext(Dispatchers.IO) {
         fun af() = JSONObject().put("BitRate", 128).put("EncodeType", "G711_ALAW")
             .put("SampleBit", 8).put("SampleRate", 8)
         val resp = request(
@@ -222,12 +229,16 @@ class DvripClient(
             JSONObject().put("Name", "OPTalk")
                 .put("OPTalk", JSONObject().put("Action", "Claim").put("AudioFormat", af())),
         )
-        frame(
-            MessageIds.TALK_START,
-            JSONObject().put("Name", "OPTalk").put("SessionID", sessionHex)
-                .put("OPTalk", JSONObject().put("Action", "Start").put("AudioFormat", af())),
-        )
-        resp.optInt("Ret", -1).let { it == 100 || it == 0 }
+        lastTalkResp = resp.toString()
+        val ret = resp.optInt("Ret", -1)
+        if (ret == 100 || ret == 0) {
+            frame(
+                MessageIds.TALK_START,
+                JSONObject().put("Name", "OPTalk").put("SessionID", sessionHex)
+                    .put("OPTalk", JSONObject().put("Action", "Start").put("AudioFormat", af())),
+            )
+        }
+        ret
     }
 
     /** Отправить порцию G711 A-law в камеру, обёрнутую в Sofia-аудиокадр (00 00 01 FA). */

@@ -40,7 +40,11 @@ class TalkSession(
                 val c = DvripClient(host, port); client = c
                 c.connect(4000, wifiSf)
                 if (!c.login(user, pass)) { onStatus("Рация: ошибка логина"); return@launch }
-                if (!c.talkStart()) { onStatus("Рация: камера отклонила talk"); return@launch }
+                val ret = c.talkStart()
+                if (ret != 100 && ret != 0) {
+                    onStatus("Рация: камера отклонила talk (Ret=$ret) ${c.lastTalkResp.take(120)}")
+                    return@launch
+                }
 
                 val minBuf = AudioRecord.getMinBufferSize(
                     8000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
