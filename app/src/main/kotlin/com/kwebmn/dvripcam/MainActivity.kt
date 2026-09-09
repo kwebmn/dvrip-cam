@@ -12,6 +12,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.kwebmn.dvripcam.dvrip.DvripClient
@@ -41,13 +43,14 @@ data class LiveTarget(val host: String, val port: Int, val user: String, val pas
 
 @Composable
 private fun ConnectScreen(onOpenLive: (String, Int, String, String) -> Unit) {
-    var host by remember { mutableStateOf("192.168.1.10") }
-    var port by remember { mutableStateOf("34567") }
-    var user by remember { mutableStateOf("admin") }
-    var password by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("Введите данные камеры и нажмите «Подключиться»") }
+    var host by rememberSaveable { mutableStateOf("192.168.1.10") }
+    var port by rememberSaveable { mutableStateOf("34567") }
+    var user by rememberSaveable { mutableStateOf("admin") }
+    var password by rememberSaveable { mutableStateOf("") }
+    var showPassword by rememberSaveable { mutableStateOf(false) }
+    var status by rememberSaveable { mutableStateOf("Введите данные камеры и нажмите «Подключиться»") }
     var busy by remember { mutableStateOf(false) }
-    var canLive by remember { mutableStateOf(false) }
+    var canLive by rememberSaveable { mutableStateOf(false) }
     var updCheckMsg by remember { mutableStateOf("") }
 
     val activity = androidx.compose.ui.platform.LocalContext.current as ComponentActivity
@@ -77,9 +80,17 @@ private fun ConnectScreen(onOpenLive: (String, Int, String, String) -> Unit) {
             modifier = Modifier.fillMaxWidth())
         OutlinedTextField(value = user, onValueChange = { user = it }, label = { Text("Логин") },
             singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text("Пароль") },
-            singleLine = true, visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = password, onValueChange = { password = it }, label = { Text("Пароль") },
+            singleLine = true,
+            visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                TextButton(onClick = { showPassword = !showPassword }) {
+                    Text(if (showPassword) "Скрыть" else "Показать")
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
 
         Button(
             onClick = {
