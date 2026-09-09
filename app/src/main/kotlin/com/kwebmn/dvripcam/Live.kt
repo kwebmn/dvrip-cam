@@ -172,9 +172,10 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
                 },
             )
         }
-        // Рация (push-to-talk): держать кнопку — говорить в камеру
-        Button(
-            onClick = {},
+        // Рация (push-to-talk). Не Button: у него собственный clickable, который
+        // перехватывает жест и не даёт сработать detectTapGestures/запросу разрешения.
+        var talking by remember { mutableStateOf(false) }
+        Surface(
             modifier = Modifier.fillMaxWidth().pointerInput(hasMic) {
                 detectTapGestures(
                     onPress = {
@@ -182,13 +183,28 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
                             micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             return@detectTapGestures
                         }
+                        talking = true
                         talk.start()
                         tryAwaitRelease()
                         talk.stop()
+                        talking = false
                     },
                 )
             },
-        ) { Text("🎙 Удерживать — говорить в камеру (рация)") }
+            color = if (talking) MaterialTheme.colorScheme.errorContainer
+            else MaterialTheme.colorScheme.primaryContainer,
+            shape = MaterialTheme.shapes.medium,
+        ) {
+            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                Text(
+                    if (talking) "🔴 Говорите… (отпустите, чтобы закончить)"
+                    else if (hasMic) "🎙 Удерживать — говорить в камеру (рация)"
+                    else "🎙 Нажмите — разрешить микрофон для рации",
+                    color = if (talking) MaterialTheme.colorScheme.onErrorContainer
+                    else MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+        }
 
         Text(status, style = MaterialTheme.typography.bodySmall)
         Text("Если чёрный экран — помаши рукой перед камерой (она спит). Рация экспериментальная.",
