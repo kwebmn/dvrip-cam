@@ -89,6 +89,10 @@ private fun ConnectScreen(
     val store = remember { CameraStore(activity) }
     var saved by remember { mutableStateOf(store.list()) }
 
+    // --- поиск в сети ---
+    var scanning by remember { mutableStateOf(false) }
+    var found by remember { mutableStateOf<List<FoundCamera>>(emptyList()) }
+
     // --- автообновление из GitHub Releases ---
     var update by remember { mutableStateOf<com.kwebmn.dvripcam.update.ReleaseInfo?>(null) }
     var updMsg by remember { mutableStateOf("") }
@@ -128,6 +132,38 @@ private fun ConnectScreen(
                                 store.remove(cam.host, cam.port); saved = store.list()
                             })
                         },
+                    )
+                }
+            }
+        }
+
+        OutlinedButton(
+            onClick = {
+                if (scanning) return@OutlinedButton
+                scanning = true; found = emptyList(); status = "Ищу камеры в сети…"
+                activity.lifecycleScope.launch {
+                    val acc = LinkedHashMap<String, FoundCamera>()
+                    Discovery.scan(activity, durationMs = 6000) { cam ->
+                        acc[cam.host] = cam; found = acc.values.toList()
+                    }
+                    scanning = false
+                    status = if (found.isEmpty())
+                        "Камеры не найдены. Разбуди камеру движением и повтори."
+                    else "Найдено: ${found.size}"
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (scanning) "Поиск…" else "🔎 Найти камеру в сети") }
+
+        if (found.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                found.forEach { cam ->
+                    AssistChip(
+                        onClick = { host = cam.host; canLive = false; status = "Выбрано ${cam.host}" },
+                        label = { Text(cam.name.ifBlank { cam.host }) },
                     )
                 }
             }
