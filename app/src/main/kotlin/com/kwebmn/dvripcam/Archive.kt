@@ -24,25 +24,6 @@ import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import javax.net.SocketFactory
 
-/** Соединиться и залогиниться, переспрашивая до 60с (батарейная камера). */
-private suspend fun DvripClient.connectAwait(
-    user: String, pass: String, wifiSf: SocketFactory?, onStatus: (String) -> Unit,
-): Boolean {
-    val deadline = System.currentTimeMillis() + 60_000
-    while (System.currentTimeMillis() < deadline) {
-        try {
-            connect(3000, wifiSf)
-            return if (login(user, pass)) true else { onStatus("Ошибка логина"); false }
-        } catch (e: Exception) {
-            onStatus("Жду пробуждения камеры… помаши рукой")
-            runCatching { close() }
-            delay(1500)
-        }
-    }
-    onStatus("Камера не ответила (спит?)")
-    return false
-}
-
 /** Список записей за диапазон дат с пагинацией (лимит ~64/запрос -> окна по 6ч). */
 private suspend fun listRecordings(
     client: DvripClient, d0: LocalDate, d1: LocalDate, onStatus: (String) -> Unit,

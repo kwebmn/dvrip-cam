@@ -7,6 +7,7 @@ import android.view.Surface
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -81,13 +82,15 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
     var status by remember { mutableStateOf("Готовлюсь…") }
     val wifiSf = remember { wifiSocketFactory(ctx) }
 
+    // "Extra" = D1 (лёгкий поток), "Main" = 1080p. Смена качества пересоздаёт плеер.
+    var stream by rememberSaveable { mutableStateOf("Extra") }
     var aspect by remember { mutableStateOf(4f / 3f) }
-    val player = remember {
+    val player = remember(stream) {
         LivePlayer(
             host, port, user, pass, wifiSf,
             onStatus = { status = it },
             onVideoSize = { w, h -> if (h > 0) aspect = w.toFloat() / h },
-        ).also { it.streamType = "Extra" }
+        ).also { it.streamType = stream }
     }
     DisposableEffect(player) { onDispose { player.stop() } }
 
@@ -95,7 +98,14 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = onBack) { Text("← Назад") }
-            Text("Live (D1)", style = MaterialTheme.typography.titleLarge)
+            Text(if (stream == "Main") "Live (1080p)" else "Live (D1)",
+                style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.weight(1f))
+            FilterChip(
+                selected = stream == "Main",
+                onClick = { stream = if (stream == "Main") "Extra" else "Main" },
+                label = { Text(if (stream == "Main") "HD" else "SD") },
+            )
         }
 
         Box(

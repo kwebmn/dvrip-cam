@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
                         is Route.Connect -> ConnectScreen(
                             onOpenLive = { h, p, u, pw -> route = Route.Live(h, p, u, pw) },
                             onOpenArchive = { h, p, u, pw -> route = Route.Archive(h, p, u, pw) },
+                            onOpenSettings = { h, p, u, pw -> route = Route.Settings(h, p, u, pw) },
                         )
                         is Route.Live -> LiveScreen(r.host, r.port, r.user, r.pass) { route = Route.Connect }
                         is Route.Archive -> ArchiveScreen(
@@ -41,6 +42,10 @@ class MainActivity : ComponentActivity() {
                         is Route.Playback -> PlaybackScreen(
                             r.host, r.port, r.user, r.pass, r.file,
                             onBack = { route = Route.Archive(r.host, r.port, r.user, r.pass) },
+                        )
+                        is Route.Settings -> SettingsScreen(
+                            r.host, r.port, r.user, r.pass,
+                            onBack = { route = Route.Connect },
                         )
                     }
                 }
@@ -53,6 +58,7 @@ sealed interface Route {
     object Connect : Route
     data class Live(val host: String, val port: Int, val user: String, val pass: String) : Route
     data class Archive(val host: String, val port: Int, val user: String, val pass: String) : Route
+    data class Settings(val host: String, val port: Int, val user: String, val pass: String) : Route
     data class Playback(
         val host: String, val port: Int, val user: String, val pass: String,
         val file: com.kwebmn.dvripcam.dvrip.RecordingFile,
@@ -63,6 +69,7 @@ sealed interface Route {
 private fun ConnectScreen(
     onOpenLive: (String, Int, String, String) -> Unit,
     onOpenArchive: (String, Int, String, String) -> Unit,
+    onOpenSettings: (String, Int, String, String) -> Unit,
 ) {
     var host by rememberSaveable { mutableStateOf("192.168.1.10") }
     var port by rememberSaveable { mutableStateOf("34567") }
@@ -178,6 +185,10 @@ private fun ConnectScreen(
                 onClick = { onOpenArchive(host.trim(), port.trim().toIntOrNull() ?: 34567, user.trim(), password) },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("🗂 Архив (SD)") }
+            OutlinedButton(
+                onClick = { onOpenSettings(host.trim(), port.trim().toIntOrNull() ?: 34567, user.trim(), password) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("⚙ Настройки / Приватность") }
         }
 
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
