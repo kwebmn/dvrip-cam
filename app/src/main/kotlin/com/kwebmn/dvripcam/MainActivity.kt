@@ -68,9 +68,10 @@ private fun ConnectScreen() {
                 busy = true
                 status = "Подключаюсь…"
                 activity.lifecycleScope.launch {
+                    val sf = wifiSocketFactory(activity)
                     val client = DvripClient(host.trim(), port.trim().toIntOrNull() ?: 34567)
                     try {
-                        client.connect()
+                        client.connect(socketFactory = sf)
                         if (!client.login(user.trim(), password)) {
                             status = "Ошибка логина (неверный пароль?)"
                         } else {
@@ -101,4 +102,17 @@ private fun ConnectScreen() {
             Text(status, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
         }
     }
+}
+
+/**
+ * SocketFactory, привязанный к текущей Wi-Fi-сети. Гарантирует, что локальное соединение
+ * к камере пойдёт через Wi-Fi, даже если включены мобильные данные (иначе Android может
+ * маршрутизировать сокет через соту → "No route to host").
+ */
+private fun wifiSocketFactory(context: android.content.Context): javax.net.SocketFactory? {
+    val cm = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return null
+    val net = cm.allNetworks.firstOrNull {
+        cm.getNetworkCapabilities(it)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
+    }
+    return net?.socketFactory
 }

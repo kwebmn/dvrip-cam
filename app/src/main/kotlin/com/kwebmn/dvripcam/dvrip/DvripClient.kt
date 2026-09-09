@@ -26,8 +26,17 @@ class DvripClient(
 
     val isConnected: Boolean get() = socket?.isConnected == true && socket?.isClosed == false
 
-    suspend fun connect(timeoutMs: Int = 6000) = withContext(Dispatchers.IO) {
-        val s = Socket()
+    /**
+     * socketFactory: если задан (например, socketFactory из Wi-Fi [android.net.Network]),
+     * сокет пойдёт именно через эту сеть — иначе Android при активных мобильных данных
+     * может отправить локальное соединение через соту ("No route to host").
+     */
+    suspend fun connect(
+        timeoutMs: Int = 6000,
+        socketFactory: javax.net.SocketFactory? = null,
+    ) = withContext(Dispatchers.IO) {
+        val factory = socketFactory ?: javax.net.SocketFactory.getDefault()
+        val s = factory.createSocket() as Socket
         s.connect(InetSocketAddress(host, port), timeoutMs)
         s.soTimeout = 12000
         socket = s
