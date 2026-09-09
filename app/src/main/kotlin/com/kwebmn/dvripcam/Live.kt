@@ -24,6 +24,7 @@ class LivePlayer(
     private val pass: String,
     private val wifiSf: SocketFactory?,
     private val onStatus: (String) -> Unit,
+    private val onVideoSize: (Int, Int) -> Unit = { _, _ -> },
 ) {
     @Volatile var streamType: String = "Extra"
     @Volatile private var running = false
@@ -54,7 +55,7 @@ class LivePlayer(
                 if (!ok) { onStatus("Камера не ответила (спит?)"); return@launch }
 
                 onStatus("Live • $streamType")
-                val dec = H264Decoder(surface, onError = { onStatus(it) }); decoder = dec
+                val dec = H264Decoder(surface, onError = { onStatus(it) }, onVideoSize = onVideoSize); decoder = dec
                 val extractor = NalExtractor { nal -> dec.submitNal(nal) }
                 c.runMonitor(streamType, onPayload = { extractor.feed(it) }, isRunning = { running })
             } catch (e: Exception) {
@@ -80,8 +81,13 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
     var status by remember { mutableStateOf("Готовлюсь…") }
     val wifiSf = remember { wifiSocketFactory(ctx) }
 
+    var aspect by remember { mutableStateOf(4f / 3f) }
     val player = remember {
-        LivePlayer(host, port, user, pass, wifiSf, onStatus = { status = it }).also { it.streamType = "Extra" }
+        LivePlayer(
+            host, port, user, pass, wifiSf,
+            onStatus = { status = it },
+            onVideoSize = { w, h -> if (h > 0) aspect = w.toFloat() / h },
+        ).also { it.streamType = "Extra" }
     }
     DisposableEffect(player) { onDispose { player.stop() } }
 
@@ -92,18 +98,23 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
             Text("Live (D1)", style = MaterialTheme.typography.titleLarge)
         }
 
-        AndroidView(
+        Box(
             modifier = Modifier.fillMaxWidth().weight(1f),
-            factory = { c ->
-                SurfaceView(c).apply {
-                    holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(h: SurfaceHolder) { player.start(h.surface) }
-                        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) {}
-                        override fun surfaceDestroyed(h: SurfaceHolder) { player.stop() }
-                    })
-                }
-            },
-        )
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
+            AndroidView(
+                modifier = Modifier.fillMaxWidth().aspectRatio(aspect),
+                factory = { c ->
+                    SurfaceView(c).apply {
+                        holder.addCallback(object : SurfaceHolder.Callback {
+                            override fun surfaceCreated(h: SurfaceHolder) { player.start(h.surface) }
+                            override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) {}
+                            override fun surfaceDestroyed(h: SurfaceHolder) { player.stop() }
+                        })
+                    }
+                },
+            )
+        }
         Text(status, style = MaterialTheme.typography.bodySmall)
         Text("Если чёрный экран — помаши рукой перед камерой (она спит).",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)

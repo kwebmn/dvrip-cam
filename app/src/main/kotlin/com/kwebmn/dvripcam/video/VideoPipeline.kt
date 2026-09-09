@@ -56,6 +56,7 @@ class H264Decoder(
     private val surface: Surface,
     private val fallbackSize: Pair<Int, Int> = 1280 to 720,
     private val onError: (String) -> Unit = {},
+    private val onVideoSize: (Int, Int) -> Unit = { _, _ -> },
 ) {
     private var codec: MediaCodec? = null
     private var sps: ByteArray? = null
@@ -77,6 +78,7 @@ class H264Decoder(
         if (codec != null || sps == null || pps == null) return
         try {
             val (w, h) = SpsParser.dimensions(sps!!) ?: fallbackSize
+            onVideoSize(w, h)
             val fmt = MediaFormat.createVideoFormat("video/avc", w, h)
             fmt.setByteBuffer("csd-0", ByteBuffer.wrap(sps))
             fmt.setByteBuffer("csd-1", ByteBuffer.wrap(pps))
