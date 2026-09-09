@@ -1,0 +1,13 @@
+# бинарники и кеши — не коммитим
+go2rtc
+go2rtc_*
+*.apk
+tools/cache/
+*.mp4
+*.h264
+*.pcap
+*.zip
+__pycache__/
+*.pyc
+# личное (никогда не публиковать)
+CAMERA-NOTES.md

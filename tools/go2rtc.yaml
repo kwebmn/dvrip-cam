@@ -1,0 +1,16 @@
+log:
+  level: info
+api:
+  listen: ":1984"
+rtsp:
+  listen: ":8554"
+webrtc:
+  listen: ":8555"
+streams:
+  # --- нативные (как отдаёт камера) ---
+  cam:       dvrip://admin:${CAMERA_PASS}@${CAMERA_IP}:34567?channel=0&subtype=0   # main 1080p@25
+  cam_sub:   dvrip://admin:${CAMERA_PASS}@${CAMERA_IP}:34567?channel=0&subtype=1   # sub D1
+  # --- перекодированные на ПК (для сравнения качества/плавности/задержки) ---
+  cam_720:   exec:ffmpeg -hide_banner -rtsp_transport tcp -i rtsp://127.0.0.1:8554/cam -an -vf scale=-2:720 -c:v libx264 -preset ultrafast -tune zerolatency -g 25 -f rtsp -rtsp_transport tcp {output}
+  cam_480:   exec:ffmpeg -hide_banner -rtsp_transport tcp -i rtsp://127.0.0.1:8554/cam -an -vf scale=-2:480 -c:v libx264 -preset ultrafast -tune zerolatency -g 25 -b:v 700k -f rtsp -rtsp_transport tcp {output}
+  cam_mjpeg: exec:ffmpeg -hide_banner -rtsp_transport tcp -i rtsp://127.0.0.1:8554/cam -an -c:v mjpeg -q:v 5 -f rtsp -rtsp_transport tcp {output}
