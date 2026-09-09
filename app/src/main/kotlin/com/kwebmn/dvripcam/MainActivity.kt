@@ -42,6 +42,14 @@ private fun ConnectScreen() {
 
     val activity = androidx.compose.ui.platform.LocalContext.current as ComponentActivity
 
+    // --- автообновление из GitHub Releases ---
+    var update by remember { mutableStateOf<com.kwebmn.dvripcam.update.ReleaseInfo?>(null) }
+    var updMsg by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        val rel = com.kwebmn.dvripcam.update.Updater.latestRelease()
+        if (rel != null && com.kwebmn.dvripcam.update.Updater.isNewer(rel.versionName)) update = rel
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -100,6 +108,36 @@ private fun ConnectScreen() {
 
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
             Text(status, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+        }
+
+        update?.let { rel ->
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("⬆️ Доступно обновление ${rel.tag}", style = MaterialTheme.typography.titleMedium)
+                    if (rel.changelog.isNotBlank())
+                        Text(rel.changelog.take(400), style = MaterialTheme.typography.bodySmall)
+                    if (updMsg.isNotBlank()) Text(updMsg, style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = {
+                        val u = com.kwebmn.dvripcam.update.Updater
+                        if (!u.ensureInstallPermission(activity)) {
+                            updMsg = "Разреши установку приложений из этого источника и нажми снова"
+                            return@Button
+                        }
+                        updMsg = "Скачиваю…"
+                        activity.lifecycleScope.launch {
+                            try {
+                                val apk = u.downloadApk(activity, rel.apkUrl, rel.apkName) { p ->
+                                    updMsg = if (p >= 0) "Скачиваю… $p%" else "Скачиваю…"
+                                }
+                                updMsg = "Запускаю установку…"
+                                u.installApk(activity, apk)
+                            } catch (e: Exception) {
+                                updMsg = "Ошибка обновления: ${e.message}"
+                            }
+                        }
+                    }) { Text("Обновить до ${rel.tag}") }
+                }
+            }
         }
     }
 }
