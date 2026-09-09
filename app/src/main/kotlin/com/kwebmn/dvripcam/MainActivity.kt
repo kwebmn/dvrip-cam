@@ -73,36 +73,52 @@ private fun ConnectScreen() {
 
         Button(
             onClick = {
+                if (busy) { busy = false; return@Button }   // повторный тап = отмена ожидания
                 busy = true
                 status = "Подключаюсь…"
+                val sf = wifiSocketFactory(activity)
+                val h = host.trim()
+                val p = port.trim().toIntOrNull() ?: 34567
                 activity.lifecycleScope.launch {
-                    val sf = wifiSocketFactory(activity)
-                    val client = DvripClient(host.trim(), port.trim().toIntOrNull() ?: 34567)
-                    try {
-                        client.connect(socketFactory = sf)
-                        if (!client.login(user.trim(), password)) {
-                            status = "Ошибка логина (неверный пароль?)"
-                        } else {
-                            val info: JSONObject = client.systemInfo()
-                            status = buildString {
-                                appendLine("✅ Подключено")
-                                appendLine("HardWare: " + info.optString("HardWare", "—"))
-                                appendLine("Прошивка: " + info.optString("SoftWareVersion", "—"))
-                                appendLine("Serial: " + info.optString("SerialNo", "—"))
-                                appendLine("Сборка: " + info.optString("BuildTime", "—"))
+                    val deadline = System.currentTimeMillis() + 60_000
+                    var done = false
+                    while (!done && busy) {
+                        val client = DvripClient(h, p)
+                        try {
+                            client.connect(timeoutMs = 3000, socketFactory = sf)
+                            if (!client.login(user.trim(), password)) {
+                                status = "Ошибка логина (неверный пароль?)"
+                                done = true
+                            } else {
+                                val info: JSONObject = client.systemInfo()
+                                status = buildString {
+                                    appendLine("✅ Подключено")
+                                    appendLine("HardWare: " + info.optString("HardWare", "—"))
+                                    appendLine("Прошивка: " + info.optString("SoftWareVersion", "—"))
+                                    appendLine("Serial: " + info.optString("SerialNo", "—"))
+                                    appendLine("Сборка: " + info.optString("BuildTime", "—"))
+                                }
+                                done = true
                             }
+                        } catch (e: Exception) {
+                            // камера спит / недоступна — ждём и переспрашиваем
+                            if (System.currentTimeMillis() >= deadline) {
+                                status = "Камера не проснулась за 60 с.\nРазбуди движением (PIR) или питанием и попробуй снова."
+                                done = true
+                            } else {
+                                val left = ((deadline - System.currentTimeMillis()) / 1000)
+                                status = "Жду пробуждения камеры… помаши рукой перед ней ($left с)\n(тап по кнопке — отмена)"
+                                kotlinx.coroutines.delay(2000)
+                            }
+                        } finally {
+                            client.close()
                         }
-                    } catch (e: Exception) {
-                        status = "Не удалось: ${e.message}\n(камера спит? разбуди движением)"
-                    } finally {
-                        client.close()
-                        busy = false
                     }
+                    busy = false
                 }
             },
-            enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(if (busy) "…" else "Подключиться") }
+        ) { Text(if (busy) "Ожидание… (отмена)" else "Подключиться") }
 
         if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
 
