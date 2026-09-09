@@ -1,16 +1,23 @@
 package com.kwebmn.dvripcam
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.Surface
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import com.kwebmn.dvripcam.dvrip.DvripClient
 import com.kwebmn.dvripcam.video.AudioOut
 import com.kwebmn.dvripcam.video.G711
@@ -113,6 +120,22 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
     LaunchedEffect(player, sound) { player.setSound(sound) }
     DisposableEffect(player) { onDispose { player.stop() } }
 
+    // --- talk-back (рация): отдельное соединение, push-to-talk ---
+    val talk = remember { TalkSession(host, port, user, pass, wifiSf, onStatus = { status = it }) }
+    DisposableEffect(talk) { onDispose { talk.dispose() } }
+    var hasMic by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val micPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        hasMic = granted
+        if (!granted) status = "Нужно разрешение на микрофон для рации"
+    }
+
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -149,8 +172,26 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
                 },
             )
         }
+        // Рация (push-to-talk): держать кнопку — говорить в камеру
+        Button(
+            onClick = {},
+            modifier = Modifier.fillMaxWidth().pointerInput(hasMic) {
+                detectTapGestures(
+                    onPress = {
+                        if (!hasMic) {
+                            micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            return@detectTapGestures
+                        }
+                        talk.start()
+                        tryAwaitRelease()
+                        talk.stop()
+                    },
+                )
+            },
+        ) { Text("🎙 Удерживать — говорить в камеру (рация)") }
+
         Text(status, style = MaterialTheme.typography.bodySmall)
-        Text("Если чёрный экран — помаши рукой перед камерой (она спит).",
+        Text("Если чёрный экран — помаши рукой перед камерой (она спит). Рация экспериментальная.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
     }
 }

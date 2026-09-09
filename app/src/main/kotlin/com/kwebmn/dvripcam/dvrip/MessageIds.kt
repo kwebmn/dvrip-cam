@@ -15,6 +15,7 @@ object MessageIds {
     const val PLAYBACK_DATA = 1426
     const val TALK_START = 1430
     const val TALK_CLAIM = 1434
+    const val TALK_DATA = 1436
     const val FILE_QUERY = 1440
     const val TIME_SETTING = 1450
     const val TIME_QUERY = 1452

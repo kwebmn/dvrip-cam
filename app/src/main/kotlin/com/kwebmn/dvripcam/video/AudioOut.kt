@@ -42,6 +42,34 @@ object G711 {
         val table = if (format == 0x0A || format == 0x07) ulaw else alaw
         return ShortArray(payload.size) { table[payload[it].toInt() and 0xFF] }
     }
+
+    /** Кодировать PCM16 → G.711 A-law (для talk-back). */
+    fun pcm16ToAlaw(pcm: ShortArray, len: Int = pcm.size): ByteArray {
+        val out = ByteArray(len)
+        for (i in 0 until len) out[i] = encodeAlaw(pcm[i].toInt())
+        return out
+    }
+
+    private fun encodeAlaw(sample0: Int): Byte {
+        var sample = sample0
+        val sign = if (sample and 0x8000 != 0) 0x00 else 0x80
+        if (sign == 0x00) sample = -sample
+        if (sample > 32635) sample = 32635
+        val exponent: Int
+        val mantissa: Int
+        if (sample >= 256) {
+            var exp = 7
+            var expMask = 0x4000
+            while (exp > 0 && sample and expMask == 0) { exp--; expMask = expMask shr 1 }
+            exponent = exp
+            mantissa = (sample shr (exponent + 3)) and 0x0F
+        } else {
+            exponent = 0
+            mantissa = sample shr 4
+        }
+        val alawByte = (sign or (exponent shl 4) or mantissa)
+        return (alawByte xor 0x55).toByte()
+    }
 }
 
 /** Простой проигрыватель PCM16 8кГц моно. Потокобезопасен для write из потока чтения сети. */

@@ -202,6 +202,59 @@ class DvripClient(
         }
     }
 
+    /** Отправить сырой (не-JSON) кадр: заголовок + тело как есть. Для talk-аудио. */
+    private fun frameRaw(msgId: Int, body: ByteArray) {
+        val header = DvripHeader.build(sessionId, seq++, msgId, body.size)
+        val out = output ?: error("not connected")
+        out.write(header); out.write(body); out.flush()
+    }
+
+    /**
+     * Начать talk-back (микрофон → камера): Claim (1434, ждём ответ) + Start (1430).
+     * Использовать НА ОТДЕЛЬНОМ соединении (не на сокете живого потока!).
+     * Формат: G711 A-law, 8кГц, 8 бит.
+     */
+    suspend fun talkStart(): Boolean = withContext(Dispatchers.IO) {
+        fun af() = JSONObject().put("BitRate", 128).put("EncodeType", "G711_ALAW")
+            .put("SampleBit", 8).put("SampleRate", 8)
+        val resp = request(
+            MessageIds.TALK_CLAIM,
+            JSONObject().put("Name", "OPTalk")
+                .put("OPTalk", JSONObject().put("Action", "Claim").put("AudioFormat", af())),
+        )
+        frame(
+            MessageIds.TALK_START,
+            JSONObject().put("Name", "OPTalk").put("SessionID", sessionHex)
+                .put("OPTalk", JSONObject().put("Action", "Start").put("AudioFormat", af())),
+        )
+        resp.optInt("Ret", -1).let { it == 100 || it == 0 }
+    }
+
+    /** Отправить порцию G711 A-law в камеру, обёрнутую в Sofia-аудиокадр (00 00 01 FA). */
+    suspend fun talkSend(g711: ByteArray) = withContext(Dispatchers.IO) {
+        val len = g711.size
+        val body = ByteArray(8 + len)
+        body[0] = 0; body[1] = 0; body[2] = 1; body[3] = 0xFA.toByte()
+        body[4] = 0x0E            // тип: G711 A-law
+        body[5] = 0x02            // 8 кГц
+        body[6] = (len and 0xFF).toByte()
+        body[7] = ((len shr 8) and 0xFF).toByte()
+        System.arraycopy(g711, 0, body, 8, len)
+        frameRaw(MessageIds.TALK_DATA, body)
+    }
+
+    /** Завершить talk-back. */
+    suspend fun talkStop() = withContext(Dispatchers.IO) {
+        runCatching {
+            frame(
+                MessageIds.TALK_START,
+                JSONObject().put("Name", "OPTalk").put("SessionID", sessionHex)
+                    .put("OPTalk", JSONObject().put("Action", "Stop")),
+            )
+        }
+        Unit
+    }
+
     fun close() {
         runCatching { socket?.close() }
         socket = null; input = null; output = null
