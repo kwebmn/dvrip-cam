@@ -11,3 +11,5 @@ __pycache__/
 *.pyc
 # личное (никогда не публиковать)
 CAMERA-NOTES.md
+*.keystore
+*.b64
