@@ -3,6 +3,8 @@ package com.kwebmn.dvripcam
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -83,6 +85,10 @@ private fun ConnectScreen(
 
     val activity = androidx.compose.ui.platform.LocalContext.current as ComponentActivity
 
+    // --- сохранённые камеры ---
+    val store = remember { CameraStore(activity) }
+    var saved by remember { mutableStateOf(store.list()) }
+
     // --- автообновление из GitHub Releases ---
     var update by remember { mutableStateOf<com.kwebmn.dvripcam.update.ReleaseInfo?>(null) }
     var updMsg by remember { mutableStateOf("") }
@@ -100,6 +106,32 @@ private fun ConnectScreen(
     ) {
         Text("DVRIP Cam", style = MaterialTheme.typography.headlineMedium)
         Text("Локальное подключение к камере (DVRIP, порт 34567)", style = MaterialTheme.typography.bodySmall)
+
+        if (saved.isNotEmpty()) {
+            Text("Мои камеры", style = MaterialTheme.typography.labelMedium)
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                saved.forEach { cam ->
+                    InputChip(
+                        selected = host == cam.host && port == cam.port.toString(),
+                        onClick = {
+                            host = cam.host; port = cam.port.toString()
+                            user = cam.user; password = cam.pass
+                            canLive = false
+                            status = "Выбрана «${cam.name}». Нажмите «Подключиться»"
+                        },
+                        label = { Text(cam.name.ifBlank { cam.host }) },
+                        trailingIcon = {
+                            Text("✕", modifier = Modifier.clickable {
+                                store.remove(cam.host, cam.port); saved = store.list()
+                            })
+                        },
+                    )
+                }
+            }
+        }
 
         OutlinedTextField(value = host, onValueChange = { host = it }, label = { Text("IP камеры") },
             singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -189,6 +221,16 @@ private fun ConnectScreen(
                 onClick = { onOpenSettings(host.trim(), port.trim().toIntOrNull() ?: 34567, user.trim(), password) },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("⚙ Настройки / Приватность") }
+            TextButton(
+                onClick = {
+                    val h = host.trim(); val p = port.trim().toIntOrNull() ?: 34567
+                    val existing = saved.firstOrNull { it.host == h && it.port == p }?.name
+                    store.save(CameraEntry(existing?.ifBlank { h } ?: h, h, p, user.trim(), password))
+                    saved = store.list()
+                    status = "Камера сохранена ($h)"
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("💾 Сохранить камеру") }
         }
 
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
