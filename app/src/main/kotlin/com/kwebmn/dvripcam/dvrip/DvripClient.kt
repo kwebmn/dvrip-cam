@@ -108,6 +108,48 @@ class DvripClient(
         return resp.optJSONObject("SystemInfo") ?: JSONObject()
     }
 
+    /** Прочитать один сырой пакет (без разбора JSON): (msgId, тело). */
+    private fun recvRaw(): Pair<Int, ByteArray> {
+        val inp = input ?: error("not connected")
+        val header = ByteArray(DvripHeader.SIZE)
+        inp.readFully(header)
+        val p = DvripHeader.parse(header)
+        val body = if (p.bodyLen > 0) ByteArray(p.bodyLen).also { inp.readFully(it) } else ByteArray(0)
+        return Pair(p.msgId, body)
+    }
+
+    /**
+     * Запустить живой поток OPMonitor (Claim 1413 -> Start 1410) и читать медиа-пакеты,
+     * отдавая payload каждого в [onPayload], пока [isRunning] == true.
+     * streamType: "Main" (1080p) или "Extra" (D1).
+     */
+    suspend fun runMonitor(
+        streamType: String,
+        onPayload: (ByteArray) -> Unit,
+        isRunning: () -> Boolean,
+    ) = withContext(Dispatchers.IO) {
+        fun param() = JSONObject()
+            .put("Channel", 0).put("CombinMode", "NONE")
+            .put("StreamType", streamType).put("TransMode", "TCP")
+        // Claim (ждём ответ)
+        request(
+            MessageIds.MONITOR_CLAIM,
+            JSONObject().put("Name", "OPMonitor")
+                .put("OPMonitor", JSONObject().put("Action", "Claim").put("Parameter", param())),
+        )
+        // Start (медиа идёт следом, ответ не ждём)
+        val startObj = JSONObject().put("Name", "OPMonitor").put("SessionID", sessionHex)
+            .put("OPMonitor", JSONObject().put("Action", "Start").put("Parameter", param()))
+        frame(MessageIds.MONITOR_START, startObj)
+        socket?.soTimeout = 8000
+        while (isRunning()) {
+            val (_, body) = recvRaw()
+            if (body.isEmpty()) continue
+            if (body[0] == '{'.code.toByte()) continue // JSON-контрол, не медиа
+            onPayload(body)
+        }
+    }
+
     fun close() {
         runCatching { socket?.close() }
         socket = null; input = null; output = null

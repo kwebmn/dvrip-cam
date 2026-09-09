@@ -24,21 +24,30 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    ConnectScreen()
+                    var live by remember { mutableStateOf<LiveTarget?>(null) }
+                    val t = live
+                    if (t == null) {
+                        ConnectScreen(onOpenLive = { h, p, u, pw -> live = LiveTarget(h, p, u, pw) })
+                    } else {
+                        LiveScreen(t.host, t.port, t.user, t.pass) { live = null }
+                    }
                 }
             }
         }
     }
 }
 
+data class LiveTarget(val host: String, val port: Int, val user: String, val pass: String)
+
 @Composable
-private fun ConnectScreen() {
+private fun ConnectScreen(onOpenLive: (String, Int, String, String) -> Unit) {
     var host by remember { mutableStateOf("192.168.1.10") }
     var port by remember { mutableStateOf("34567") }
     var user by remember { mutableStateOf("admin") }
     var password by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Введите данные камеры и нажмите «Подключиться»") }
     var busy by remember { mutableStateOf(false) }
+    var canLive by remember { mutableStateOf(false) }
 
     val activity = androidx.compose.ui.platform.LocalContext.current as ComponentActivity
 
@@ -98,6 +107,7 @@ private fun ConnectScreen() {
                                     appendLine("Serial: " + info.optString("SerialNo", "—"))
                                     appendLine("Сборка: " + info.optString("BuildTime", "—"))
                                 }
+                                canLive = true
                                 done = true
                             }
                         } catch (e: Exception) {
@@ -124,6 +134,13 @@ private fun ConnectScreen() {
 
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
             Text(status, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+        }
+
+        if (canLive) {
+            Button(
+                onClick = { onOpenLive(host.trim(), port.trim().toIntOrNull() ?: 34567, user.trim(), password) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("▶ Смотреть Live") }
         }
 
         update?.let { rel ->
@@ -163,7 +180,7 @@ private fun ConnectScreen() {
  * к камере пойдёт через Wi-Fi, даже если включены мобильные данные (иначе Android может
  * маршрутизировать сокет через соту → "No route to host").
  */
-private fun wifiSocketFactory(context: android.content.Context): javax.net.SocketFactory? {
+internal fun wifiSocketFactory(context: android.content.Context): javax.net.SocketFactory? {
     val cm = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return null
     val net = cm.allNetworks.firstOrNull {
         cm.getNetworkCapabilities(it)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
