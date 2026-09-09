@@ -2,13 +2,15 @@
 
 **Local, cloud-free control for Xiongmai / LiteOS DVRIP battery IP cameras — no XMEye / iCSee cloud, no vendor app.**
 
-A native Android app (planned) that talks **directly** to a cheap Chinese Wi-Fi IP camera over its
+A native Android app that talks **directly** to a cheap Chinese Wi-Fi IP camera over its
 native **DVRIP / Sofia** protocol (TCP 34567) on your LAN: live video, SD-card archive playback,
 configuration and Wi-Fi onboarding — with **no cloud account, no Firebase, no analytics**.
 
-> **Status:** design / reverse-engineering stage. The DVRIP protocol for the target camera is fully
-> reverse-engineered and documented here; the Android app is specified and pending implementation.
-> Working Python helper tools are included in [`tools/`](tools/).
+> **Status:** working app. Live video (SD/HD), live audio, SD-card archive browsing & playback,
+> and a privacy screen (disable Xiongmai cloud/push) are implemented and build on GitHub Actions;
+> install the signed APK from [Releases](../../releases). The DVRIP protocol is fully
+> reverse-engineered in [`docs/PROTOCOL.md`](docs/PROTOCOL.md); Python helper tools are in
+> [`tools/`](tools/).
 
 ## Why
 
@@ -34,15 +36,22 @@ Other RTSP-based Xiongmai cams are **not** the target of this project (see `docs
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Reverse-engineered **DVRIP protocol reference** (framing, sofia-hash, opcodes, config sections, live/playback/talk flows, discovery, Wi-Fi QR) |
 | [`tools/`](tools/) | Python helper tools (RTSP bridge config, browser viewer, Wi-Fi-QR generator, minimal DVRIP client) |
 
-## Planned features
+## Features
 
-- 🔎 Find the camera on the LAN (UDP discovery on port 34569) + add by IP
-- 🎥 Live view (native DVRIP `OPMonitor` decode via `MediaCodec`) + two-way audio
-- 🗂️ Browse and play the SD-card archive with seeking; download clips to MP4
-- ⚙️ Configure Wi-Fi, encoder, OSD/privacy masks, motion/PIR, recording, time
-- 📶 Wi-Fi onboarding: **QR code** or **SoftAP** (no BLE — the target camera has no Bluetooth)
-- 📷 Multiple cameras of the same model
+Implemented:
+
+- 🎥 Live view — native DVRIP `OPMonitor` decode via `MediaCodec`, aspect-correct, **SD/HD** (Extra D1 / Main 1080p) toggle
+- 🔊 Live audio — Sofia/DHAV demux + **G.711** (A-law/µ-law) → `AudioTrack`
+- 🗂️ SD-card archive — browse recordings by date (motion `[A]` / continuous `[R]`), play back over DVRIP `OPPlayBack`
+- ⚙️ Privacy screen — disable Xiongmai cloud (`NetWork.Nat`, secu100.net) and push (`NetWork.PMS`, push.umeye.cn)
+- ⏳ Battery-aware connect — waits for the sleeping camera to wake (trigger motion), then holds the stream
 - ⬆️ In-app self-update from GitHub Releases
+
+Planned:
+
+- 🔎 LAN discovery (UDP 34569) + multiple cameras of the same model
+- 🎙️ Two-way talk-back (`OPTalk`), clip download to MP4, more settings (Wi-Fi/OSD/motion/time)
+- 📶 Wi-Fi onboarding: **QR code** or **SoftAP** (no BLE — the target camera has no Bluetooth)
 
 ## Battery / sleep — important
 
