@@ -34,6 +34,15 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
     var pmsEnabled by remember { mutableStateOf(false) }
     var wifiSsid by remember { mutableStateOf("—") }
 
+    // статус + камера
+    var battery by remember { mutableStateOf<Int?>(null) }
+    var sdText by remember { mutableStateOf("—") }
+    var camTime by remember { mutableStateOf("—") }
+    var camName by remember { mutableStateOf("") }
+    var pirEnabled by remember { mutableStateOf(false) }
+    var pirSens by remember { mutableStateOf(0f) }
+    var motionEnabled by remember { mutableStateOf(false) }
+
     // helper: одно соединение на операцию
     fun withClient(block: suspend (DvripClient) -> Unit) {
         if (busy) return
@@ -60,9 +69,41 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
             natEnabled = nat?.optBoolean("NatEnable", nat.optInt("NatEnable", 0) == 1) ?: false
             pmsEnabled = pms?.optBoolean("Enable", pms.optInt("Enable", 0) == 1) ?: false
             wifiSsid = wifi?.optString("SSID")?.ifBlank { "—" } ?: "—"
+            battery = runCatching { c.batteryPercent() }.getOrNull()
+            sdText = runCatching { c.storageInfo() }.getOrNull()?.let { (rem, tot, span) ->
+                "%.1f / %.1f ГБ своб.".format(rem / 1024f, tot / 1024f) + "\nзаписи: $span"
+            } ?: "—"
+            camTime = runCatching { c.getTime() }.getOrNull() ?: "—"
+            camName = runCatching { c.getChannelTitle() }.getOrNull() ?: ""
+            runCatching { c.getPir() }.getOrNull()?.let { (en, s) -> pirEnabled = en; pirSens = s.toFloat() }
+            motionEnabled = runCatching { c.getMotionEnabled() }.getOrNull() ?: false
             loaded = true
             status = "Готово"
         }
+    }
+
+    fun syncTime() = withClient { c ->
+        val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+        val ok = c.setTime(now)
+        if (ok) camTime = now
+        status = if (ok) "Часы синхронизированы: $now" else "Не удалось синхронизировать время"
+    }
+
+    fun saveName() = withClient { c ->
+        val ok = c.setChannelTitle(camName)
+        status = if (ok) "Имя камеры сохранено" else "Не удалось сохранить имя"
+    }
+
+    fun applyPir(en: Boolean, sens: Int) = withClient { c ->
+        val ok = c.setPir(en, sens)
+        if (ok) { pirEnabled = en; pirSens = sens.toFloat() }
+        status = if (ok) "PIR: ${if (en) "вкл" else "выкл"}, чувствит. $sens" else "Не удалось изменить PIR"
+    }
+
+    fun applyMotion(en: Boolean) = withClient { c ->
+        val ok = c.setMotionEnabled(en)
+        if (ok) motionEnabled = en
+        status = if (ok) "Детекция движения: ${if (en) "вкл" else "выкл"}" else "Не удалось изменить детекцию"
     }
 
     fun applyNat(enable: Boolean) = withClient { c ->
@@ -90,6 +131,57 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = onBack) { Text("← Назад") }
             Text("Настройки", style = MaterialTheme.typography.titleLarge)
+        }
+
+        // --- Статус ---
+        Text("Статус", style = MaterialTheme.typography.titleMedium)
+        ElevatedCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                val batTxt = when (val b = battery) {
+                    null -> "—"; -1 -> "на внешнем питании"; -2 -> "—"; else -> "$b%"
+                }
+                Text("🔋 Батарея: $batTxt")
+                Text("💾 SD: $sdText", style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🕐 Время камеры: $camTime", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { syncTime() }, enabled = loaded && !busy) { Text("Синхр.") }
+                }
+            }
+        }
+
+        // --- Камера ---
+        Text("Камера", style = MaterialTheme.typography.titleMedium)
+        ElevatedCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = camName, onValueChange = { camName = it },
+                    label = { Text("Имя камеры (OSD-титул)") }, singleLine = true,
+                    enabled = loaded && !busy, modifier = Modifier.fillMaxWidth(),
+                )
+                TextButton(onClick = { saveName() }, enabled = loaded && !busy) { Text("Сохранить имя") }
+
+                HorizontalDivider()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("PIR-датчик (движение/пробуждение)")
+                        Text("Чувствительность: ${pirSens.toInt()} (0–4)", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(checked = pirEnabled, enabled = loaded && !busy,
+                        onCheckedChange = { applyPir(it, pirSens.toInt()) })
+                }
+                Slider(
+                    value = pirSens, onValueChange = { pirSens = it },
+                    onValueChangeFinished = { applyPir(pirEnabled, pirSens.toInt()) },
+                    valueRange = 0f..4f, steps = 3, enabled = loaded && !busy && pirEnabled,
+                )
+
+                HorizontalDivider()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Детекция движения (по видео)", Modifier.weight(1f))
+                    Switch(checked = motionEnabled, enabled = loaded && !busy,
+                        onCheckedChange = { applyMotion(it) })
+                }
+            }
         }
 
         Text("Приватность (де-китаизация)", style = MaterialTheme.typography.titleMedium)

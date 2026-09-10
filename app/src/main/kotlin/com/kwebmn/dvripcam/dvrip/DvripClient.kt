@@ -115,6 +115,79 @@ class DvripClient(
         return resp.optJSONObject("SystemInfo") ?: JSONObject()
     }
 
+    /** Заряд батареи: Dev.ElectCapacity.percent (0..100; -1 = на внешнем питании). null если недоступно. */
+    suspend fun batteryPercent(): Int? {
+        val o = getConfig("Dev.ElectCapacity").optJSONObject("Dev.ElectCapacity") ?: return null
+        return if (o.has("percent")) o.optInt("percent", -2) else null
+    }
+
+    /** Инфо об SD: (свободно МБ, всего МБ, диапазон записей) через SystemInfo-канал StorageInfo (1020). */
+    suspend fun storageInfo(): Triple<Long, Long, String>? {
+        val resp = request(MessageIds.SYSTEM_INFO, JSONObject().put("Name", "StorageInfo"))
+        val arr = resp.optJSONArray("StorageInfo") ?: return null
+        val part = arr.optJSONObject(0)?.optJSONArray("Partition")?.optJSONObject(0) ?: return null
+        fun hex(s: String): Long = runCatching { java.lang.Long.decode(s) }.getOrDefault(0L)
+        val total = hex(part.optString("TotalSpace", "0x0"))
+        val remain = hex(part.optString("RemainSpace", "0x0"))
+        val span = part.optString("NewStartTime", "") + " … " + part.optString("NewEndTime", "")
+        return Triple(remain, total, span)
+    }
+
+    /** Текущее время камеры (строка "YYYY-MM-DD HH:MM:SS") или null. */
+    suspend fun getTime(): String? {
+        val resp = request(MessageIds.TIME_QUERY, JSONObject().put("Name", "OPTimeQuery"))
+        return resp.optString("OPTimeQuery", "").ifBlank { null }
+    }
+
+    /** Установить время камеры. */
+    suspend fun setTime(value: String): Boolean {
+        val resp = request(MessageIds.TIME_SETTING, JSONObject().put("Name", "OPTimeSetting").put("OPTimeSetting", value))
+        return resp.optInt("Ret", -1).let { it == 100 || it == 0 }
+    }
+
+    /** Имя канала (OSD-титул) из AVEnc.VideoWidget[0].ChannelTitle.Name. */
+    suspend fun getChannelTitle(): String? {
+        val arr = getConfig("AVEnc.VideoWidget").optJSONArray("AVEnc.VideoWidget") ?: return null
+        return arr.optJSONObject(0)?.optJSONObject("ChannelTitle")?.optString("Name")
+    }
+
+    /** Сменить имя канала (OSD). Читает секцию, меняет Name, пишет обратно. */
+    suspend fun setChannelTitle(name: String): Boolean {
+        val arr = getConfig("AVEnc.VideoWidget").optJSONArray("AVEnc.VideoWidget") ?: return false
+        val obj = arr.optJSONObject(0) ?: return false
+        obj.optJSONObject("ChannelTitle")?.put("Name", name) ?: return false
+        val resp = request(
+            MessageIds.CONFIG_SET,
+            JSONObject().put("Name", "AVEnc.VideoWidget").put("AVEnc.VideoWidget", arr),
+        )
+        return resp.optInt("Ret", -1).let { it == 100 || it == 0 }
+    }
+
+    /** PIR: (Enable, PirSensitive 0..4) из Alarm.PIR[0], либо null. */
+    suspend fun getPir(): Pair<Boolean, Int>? {
+        val o = getConfig("Alarm.PIR").optJSONArray("Alarm.PIR")?.optJSONObject(0) ?: return null
+        return o.optBoolean("Enable", false) to o.optInt("PirSensitive", 0)
+    }
+
+    suspend fun setPir(enable: Boolean, sensitive: Int): Boolean {
+        val arr = getConfig("Alarm.PIR").optJSONArray("Alarm.PIR") ?: return false
+        val o = arr.optJSONObject(0) ?: return false
+        o.put("Enable", enable).put("PirSensitive", sensitive.coerceIn(0, 4))
+        val resp = request(MessageIds.CONFIG_SET, JSONObject().put("Name", "Alarm.PIR").put("Alarm.PIR", arr))
+        return resp.optInt("Ret", -1).let { it == 100 || it == 0 }
+    }
+
+    /** Детекция движения вкл/выкл (Detect.MotionDetect[0].Enable). */
+    suspend fun getMotionEnabled(): Boolean? =
+        getConfig("Detect.MotionDetect").optJSONArray("Detect.MotionDetect")?.optJSONObject(0)?.optBoolean("Enable")
+
+    suspend fun setMotionEnabled(enable: Boolean): Boolean {
+        val arr = getConfig("Detect.MotionDetect").optJSONArray("Detect.MotionDetect") ?: return false
+        arr.optJSONObject(0)?.put("Enable", enable) ?: return false
+        val resp = request(MessageIds.CONFIG_SET, JSONObject().put("Name", "Detect.MotionDetect").put("Detect.MotionDetect", arr))
+        return resp.optInt("Ret", -1).let { it == 100 || it == 0 }
+    }
+
     /** Прочитать один сырой пакет (без разбора JSON): (msgId, тело). */
     private fun recvRaw(): Pair<Int, ByteArray> {
         val inp = input ?: error("not connected")
