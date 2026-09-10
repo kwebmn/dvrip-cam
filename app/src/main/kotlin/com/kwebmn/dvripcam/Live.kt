@@ -114,8 +114,8 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
     var status by remember { mutableStateOf("Готовлюсь…") }
     val wifiSf = remember { wifiSocketFactory(ctx) }
 
-    // "Extra" = D1 (лёгкий поток), "Main" = 1080p. Смена качества пересоздаёт плеер.
-    var stream by rememberSaveable { mutableStateOf("Extra") }
+    // "Extra" = D1 (лёгкий поток), "Main" = 1080p. По умолчанию — нормальное HD (1080p).
+    var stream by rememberSaveable { mutableStateOf("Main") }
     var sound by rememberSaveable { mutableStateOf(false) }
     var aspect by remember { mutableStateOf(4f / 3f) }
     var surfaceView by remember { mutableStateOf<SurfaceView?>(null) }
