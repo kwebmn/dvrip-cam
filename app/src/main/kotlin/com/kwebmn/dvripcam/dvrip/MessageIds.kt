@@ -15,7 +15,8 @@ object MessageIds {
     const val PLAYBACK_DATA = 1426
     const val TALK_START = 1430
     const val TALK_CLAIM = 1434
-    const val TALK_DATA = 1436
+    // Аудио телефон→камера идёт на 1432 (проверено на камере: 1436 = тишина, 1432 = звук из динамика).
+    const val TALK_DATA = 1432
     const val FILE_QUERY = 1440
     const val TIME_SETTING = 1450
     const val TIME_QUERY = 1452
