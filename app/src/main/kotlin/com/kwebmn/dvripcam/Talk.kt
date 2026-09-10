@@ -5,7 +5,9 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import com.kwebmn.dvripcam.dvrip.DvripClient
+import com.kwebmn.dvripcam.video.AudioOut
 import com.kwebmn.dvripcam.video.G711
+import com.kwebmn.dvripcam.video.SofiaDemuxer
 import kotlinx.coroutines.*
 import javax.net.SocketFactory
 
@@ -57,14 +59,35 @@ class TalkSession(
                     onStatus("Рация: микрофон недоступен"); return@launch
                 }
                 record.startRecording()
-                onStatus("🎤 Говорите…")
+                onStatus("🎤 Говорите… (слышно камеру)")
+
+                // Двусторонний звук: параллельно читаем возврат камеры (mid 1433, DHAV FA) и играем.
+                val audioOut = AudioOut().also { it.start() }
+                val rxDemux = SofiaDemuxer(onVideo = {}, onAudio = { payload, fmt ->
+                    audioOut.write(G711.toPcm16(payload, fmt))
+                })
+                val rxJob = launch {
+                    try {
+                        while (running && isActive) {
+                            val (_, body) = c.readRawPacket()
+                            if (body.isEmpty() || body[0] == '{'.code.toByte()) continue
+                            rxDemux.feed(body)
+                        }
+                    } catch (_: Exception) { /* сокет закрыт при stop */ }
+                }
+
                 val chunk = ShortArray(320) // 40 мс @ 8кГц
-                while (running && isActive) {
-                    val n = record.read(chunk, 0, chunk.size)
-                    if (n > 0) {
-                        val alaw = G711.pcm16ToAlaw(chunk, n)
-                        runCatching { c.talkSend(alaw) }
+                try {
+                    while (running && isActive) {
+                        val n = record.read(chunk, 0, chunk.size)
+                        if (n > 0) {
+                            val alaw = G711.pcm16ToAlaw(chunk, n)
+                            runCatching { c.talkSend(alaw) }
+                        }
                     }
+                } finally {
+                    rxJob.cancel()
+                    runCatching { audioOut.stop() }
                 }
             } catch (e: Exception) {
                 if (running) onStatus("Рация: ${e.message}")

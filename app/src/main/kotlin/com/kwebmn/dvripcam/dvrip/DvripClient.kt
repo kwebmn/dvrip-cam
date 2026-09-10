@@ -254,6 +254,9 @@ class DvripClient(
         frameRaw(MessageIds.TALK_DATA, body)
     }
 
+    /** Прочитать один сырой talk-возврат (аудио камеры, mid 1433). Публичный для двустороннего звука. */
+    suspend fun readRawPacket(): Pair<Int, ByteArray> = withContext(Dispatchers.IO) { recvRaw() }
+
     /** Завершить talk-back. */
     suspend fun talkStop() = withContext(Dispatchers.IO) {
         runCatching {
