@@ -221,8 +221,14 @@ private fun ConnectScreen(
                         } catch (e: Exception) {
                             // камера спит / недоступна — ждём и переспрашиваем
                             if (System.currentTimeMillis() >= deadline) {
-                                status = "Камера не проснулась за 60 с.\nРазбуди движением (PIR) или питанием и попробуй снова."
+                                status = "Камера не ответила на $h.\nИщу её в сети (может, сменился IP)…"
                                 done = true
+                                // авто-поиск: вдруг адрес изменился (напр. .25 → .27)
+                                val acc = LinkedHashMap<String, FoundCamera>()
+                                Discovery.scan(activity, durationMs = 6000) { c -> acc[c.host] = c; found = acc.values.toList() }
+                                status = if (found.isEmpty())
+                                    "Камера не ответила на $h и не найдена в сети.\nРазбуди движением (PIR) и повтори."
+                                else "Не ответила на $h. Найдено в сети: ${found.joinToString { it.host }} — выбери камеру выше."
                             } else {
                                 val left = ((deadline - System.currentTimeMillis()) / 1000)
                                 status = "Жду пробуждения камеры… помаши рукой перед ней ($left с)\n(тап по кнопке — отмена)"

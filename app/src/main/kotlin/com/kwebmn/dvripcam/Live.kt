@@ -3,21 +3,30 @@ package com.kwebmn.dvripcam
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.Surface
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import java.io.File
+import java.io.FileOutputStream
 import com.kwebmn.dvripcam.dvrip.DvripClient
 import com.kwebmn.dvripcam.video.AudioOut
 import com.kwebmn.dvripcam.video.G711
@@ -109,6 +118,10 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
     var stream by rememberSaveable { mutableStateOf("Extra") }
     var sound by rememberSaveable { mutableStateOf(false) }
     var aspect by remember { mutableStateOf(4f / 3f) }
+    var surfaceView by remember { mutableStateOf<SurfaceView?>(null) }
+    var scale by remember { mutableStateOf(1f) }
+    var offX by remember { mutableStateOf(0f) }
+    var offY by remember { mutableStateOf(0f) }
     val player = remember(stream) {
         LivePlayer(
             host, port, user, pass, wifiSf,
@@ -143,6 +156,7 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
             Text(if (stream == "Main") "Live (1080p)" else "Live (D1)",
                 style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.weight(1f))
+            TextButton(onClick = { takeSnapshot(ctx, surfaceView) { status = it } }) { Text("📷") }
             FilterChip(
                 selected = sound,
                 onClick = { sound = !sound },
@@ -156,13 +170,26 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
         }
 
         Box(
-            modifier = Modifier.fillMaxWidth().weight(1f),
+            modifier = Modifier.fillMaxWidth().weight(1f)
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 5f)
+                        if (scale > 1f) {
+                            offX += pan.x; offY += pan.y
+                        } else { offX = 0f; offY = 0f }
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures(onDoubleTap = { scale = 1f; offX = 0f; offY = 0f })
+                },
             contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
             AndroidView(
-                modifier = Modifier.fillMaxWidth().aspectRatio(aspect),
+                modifier = Modifier.fillMaxWidth().aspectRatio(aspect).graphicsLayer(
+                    scaleX = scale, scaleY = scale, translationX = offX, translationY = offY,
+                ),
                 factory = { c ->
-                    SurfaceView(c).apply {
+                    SurfaceView(c).also { surfaceView = it }.apply {
                         holder.addCallback(object : SurfaceHolder.Callback {
                             override fun surfaceCreated(h: SurfaceHolder) { player.start(h.surface) }
                             override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) {}
@@ -171,6 +198,10 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
                     }
                 },
             )
+            if (scale > 1f) {
+                Text("×%.1f".format(scale), modifier = Modifier.align(androidx.compose.ui.Alignment.TopEnd).padding(8.dp),
+                    color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
+            }
         }
         // Рация (push-to-talk). Не Button: у него собственный clickable, который
         // перехватывает жест и не даёт сработать detectTapGestures/запросу разрешения.
@@ -214,3 +245,28 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
 
 @Composable
 private fun LocalContextX(): Context = androidx.compose.ui.platform.LocalContext.current
+
+/** Снимок текущего кадра из SurfaceView через PixelCopy → JPEG в папку Pictures приложения. */
+private fun takeSnapshot(ctx: Context, sv: SurfaceView?, onResult: (String) -> Unit) {
+    if (sv == null || sv.width == 0 || sv.height == 0) { onResult("Нет кадра для снимка"); return }
+    val bmp = Bitmap.createBitmap(sv.width, sv.height, Bitmap.Config.ARGB_8888)
+    try {
+        PixelCopy.request(sv, bmp, { result ->
+            if (result == PixelCopy.SUCCESS) {
+                try {
+                    val dir = ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES) ?: ctx.cacheDir
+                    val out = File(dir, "snap_${System.currentTimeMillis()}.jpg")
+                    FileOutputStream(out).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+                    onResult("📷 Снимок: ${out.name}")
+                    Toast.makeText(ctx, "Снимок сохранён: ${out.name}", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    onResult("Ошибка снимка: ${e.message}")
+                }
+            } else {
+                onResult("PixelCopy: код $result")
+            }
+        }, Handler(Looper.getMainLooper()))
+    } catch (e: Exception) {
+        onResult("Снимок недоступен: ${e.message}")
+    }
+}
