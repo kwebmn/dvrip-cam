@@ -13,9 +13,13 @@ import android.view.Surface
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -28,11 +32,11 @@ import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileOutputStream
 import com.kwebmn.dvripcam.dvrip.DvripClient
+import com.kwebmn.dvripcam.video.AudioFrameExtractor
 import com.kwebmn.dvripcam.video.AudioOut
 import com.kwebmn.dvripcam.video.G711
 import com.kwebmn.dvripcam.video.H264Decoder
 import com.kwebmn.dvripcam.video.NalExtractor
-import com.kwebmn.dvripcam.video.SofiaDemuxer
 import kotlinx.coroutines.*
 import javax.net.SocketFactory
 
@@ -84,12 +88,17 @@ class LivePlayer(
 
                 onStatus("Live • $streamType")
                 val dec = H264Decoder(surface, onError = { onStatus(it) }, onVideoSize = onVideoSize); decoder = dec
-                val extractor = NalExtractor { nal -> dec.submitNal(nal) }
-                val demux = SofiaDemuxer(
-                    onVideo = { extractor.feed(it) },
-                    onAudio = { payload, fmt -> if (soundOn) audio.write(G711.toPcm16(payload, fmt)) },
+                // Видео — прямая нарезка по старт-кодам (надёжно, не замирает).
+                val video = NalExtractor { nal -> dec.submitNal(nal) }
+                // Звук — независимый сканер аудиокадров (не влияет на видео).
+                val audioEx = AudioFrameExtractor { payload, fmt ->
+                    if (soundOn) audio.write(G711.toPcm16(payload, fmt))
+                }
+                c.runMonitor(
+                    streamType,
+                    onPayload = { p -> video.feed(p); audioEx.feed(p) },
+                    isRunning = { running },
                 )
-                c.runMonitor(streamType, onPayload = { demux.feed(it) }, isRunning = { running })
             } catch (e: Exception) {
                 if (running) onStatus("Поток прерван: ${e.message}")
             } finally {
@@ -111,29 +120,32 @@ class LivePlayer(
 @Composable
 fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -> Unit) {
     val ctx = LocalContextX()
-    var status by remember { mutableStateOf("Готовлюсь…") }
     val wifiSf = remember { wifiSocketFactory(ctx) }
 
-    // "Extra" = D1 (лёгкий поток), "Main" = 1080p. По умолчанию — нормальное HD (1080p).
-    var stream by rememberSaveable { mutableStateOf("Main") }
+    var stream by rememberSaveable { mutableStateOf("Main") } // "Main"=1080p HD, "Extra"=D1 SD
     var sound by rememberSaveable { mutableStateOf(false) }
-    var aspect by remember { mutableStateOf(4f / 3f) }
+    var status by remember { mutableStateOf("Подключаюсь…") }
+    var videoStarted by remember { mutableStateOf(false) }
+    var aspect by remember { mutableStateOf(16f / 9f) }
     var surfaceView by remember { mutableStateOf<SurfaceView?>(null) }
     var scale by remember { mutableStateOf(1f) }
     var offX by remember { mutableStateOf(0f) }
     var offY by remember { mutableStateOf(0f) }
+    var controls by remember { mutableStateOf(true) }
+    var talking by remember { mutableStateOf(false) }
+
     val player = remember(stream) {
         LivePlayer(
             host, port, user, pass, wifiSf,
             onStatus = { status = it },
-            onVideoSize = { w, h -> if (h > 0) aspect = w.toFloat() / h },
+            onVideoSize = { w, h -> if (h > 0) aspect = w.toFloat() / h; videoStarted = true },
         ).also { it.streamType = stream }
     }
-    // применяем текущее состояние звука к (пере)созданному плееру
+    LaunchedEffect(player) { videoStarted = false }
     LaunchedEffect(player, sound) { player.setSound(sound) }
     DisposableEffect(player) { onDispose { player.stop() } }
 
-    // --- talk-back (рация): отдельное соединение, push-to-talk ---
+    // рация (push-to-talk) на отдельном соединении
     val talk = remember { TalkSession(host, port, user, pass, wifiSf, onStatus = { status = it }) }
     DisposableEffect(talk) { onDispose { talk.dispose() } }
     var hasMic by remember {
@@ -144,45 +156,30 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
     }
     val micPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        hasMic = granted
-        if (!granted) status = "Нужно разрешение на микрофон для рации"
+    ) { granted -> hasMic = granted }
+
+    // автоскрытие кнопок через ~3.5с (пока видео идёт и не говорим)
+    LaunchedEffect(controls, videoStarted, talking) {
+        if (controls && videoStarted && !talking) { delay(3500); controls = false }
     }
 
-    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = onBack) { Text("← Назад") }
-            Text(if (stream == "Main") "Live (1080p)" else "Live (D1)",
-                style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = { takeSnapshot(ctx, surfaceView) { status = it } }) { Text("📷") }
-            FilterChip(
-                selected = sound,
-                onClick = { sound = !sound },
-                label = { Text(if (sound) "🔊" else "🔈") },
-            )
-            FilterChip(
-                selected = stream == "Main",
-                onClick = { stream = if (stream == "Main") "Extra" else "Main" },
-                label = { Text(if (stream == "Main") "HD" else "SD") },
-            )
-        }
-
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        // --- видео на весь экран ---
         Box(
-            modifier = Modifier.fillMaxWidth().weight(1f)
+            Modifier.fillMaxSize()
                 .pointerInput(Unit) {
                     detectTransformGestures { _, pan, zoom, _ ->
                         scale = (scale * zoom).coerceIn(1f, 5f)
-                        if (scale > 1f) {
-                            offX += pan.x; offY += pan.y
-                        } else { offX = 0f; offY = 0f }
+                        if (scale > 1f) { offX += pan.x; offY += pan.y } else { offX = 0f; offY = 0f }
                     }
                 }
                 .pointerInput(Unit) {
-                    detectTapGestures(onDoubleTap = { scale = 1f; offX = 0f; offY = 0f })
+                    detectTapGestures(
+                        onTap = { controls = !controls },
+                        onDoubleTap = { scale = 1f; offX = 0f; offY = 0f },
+                    )
                 },
-            contentAlignment = androidx.compose.ui.Alignment.Center,
+            contentAlignment = Alignment.Center,
         ) {
             AndroidView(
                 modifier = Modifier.fillMaxWidth().aspectRatio(aspect).graphicsLayer(
@@ -198,48 +195,71 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
                     }
                 },
             )
-            if (scale > 1f) {
-                Text("×%.1f".format(scale), modifier = Modifier.align(androidx.compose.ui.Alignment.TopEnd).padding(8.dp),
-                    color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
+        }
+
+        // --- индикатор подключения (пока не пошло видео) ---
+        if (!videoStarted) {
+            Column(
+                Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator(color = Color.White)
+                Text(status, color = Color.White, style = MaterialTheme.typography.bodyMedium)
             }
         }
-        // Рация (push-to-talk). Не Button: у него собственный clickable, который
-        // перехватывает жест и не даёт сработать detectTapGestures/запросу разрешения.
-        var talking by remember { mutableStateOf(false) }
-        Surface(
-            modifier = Modifier.fillMaxWidth().pointerInput(hasMic) {
-                detectTapGestures(
-                    onPress = {
+
+        // --- верхняя панель кнопок (автоскрытие) ---
+        AnimatedVisibility(visible = controls, modifier = Modifier.align(Alignment.TopCenter)) {
+            Row(
+                Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.35f))
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                TextButton(onClick = onBack) { Text("←", color = Color.White) }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { takeSnapshot(ctx, surfaceView) { status = it } }) { Text("📷") }
+                TextButton(onClick = { sound = !sound }) { Text(if (sound) "🔊" else "🔈") }
+                TextButton(onClick = { stream = if (stream == "Main") "Extra" else "Main" }) {
+                    Text(if (stream == "Main") "HD" else "SD", color = Color.White)
+                }
+            }
+        }
+
+        // --- рация внизу (часть автоскрываемых кнопок) ---
+        AnimatedVisibility(visible = controls, modifier = Modifier.align(Alignment.BottomCenter)) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().pointerInput(hasMic) {
+                    detectTapGestures(onPress = {
                         if (!hasMic) {
                             micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             return@detectTapGestures
                         }
-                        talking = true
-                        talk.start()
-                        tryAwaitRelease()
-                        talk.stop()
-                        talking = false
-                    },
-                )
-            },
-            color = if (talking) MaterialTheme.colorScheme.errorContainer
-            else MaterialTheme.colorScheme.primaryContainer,
-            shape = MaterialTheme.shapes.medium,
-        ) {
-            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                Text(
-                    if (talking) "🔴 Говорите… (отпустите, чтобы закончить)"
-                    else if (hasMic) "🎙 Удерживать — говорить в камеру (рация)"
-                    else "🎙 Нажмите — разрешить микрофон для рации",
-                    color = if (talking) MaterialTheme.colorScheme.onErrorContainer
-                    else MaterialTheme.colorScheme.onPrimaryContainer,
-                )
+                        talking = true; talk.start(); tryAwaitRelease(); talk.stop(); talking = false
+                    })
+                },
+                color = if (talking) MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
+                else Color.Black.copy(alpha = 0.35f),
+            ) {
+                Box(Modifier.fillMaxWidth().padding(14.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        if (talking) "🔴 Говорите…"
+                        else if (hasMic) "🎙 Удерживать — рация"
+                        else "🎙 Нажмите — разрешить микрофон",
+                        color = Color.White,
+                    )
+                }
             }
         }
 
-        Text(status, style = MaterialTheme.typography.bodySmall)
-        Text("Если чёрный экран — помаши рукой перед камерой (она спит). Рация экспериментальная.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+        if (scale > 1f) {
+            Text(
+                "×%.1f".format(scale),
+                Modifier.align(Alignment.TopEnd).padding(top = 44.dp, end = 8.dp),
+                color = Color.White, style = MaterialTheme.typography.labelSmall,
+            )
+        }
     }
 }
 

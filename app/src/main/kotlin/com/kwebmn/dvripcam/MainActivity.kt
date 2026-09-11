@@ -28,7 +28,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    var route by remember { mutableStateOf<Route>(Route.Connect) }
+                    // Авто-старт: если есть сохранённая камера — сразу открываем её Live.
+                    val startRoute = remember {
+                        CameraStore(this@MainActivity).list().lastOrNull()?.let {
+                            Route.Live(it.host, it.port, it.user, it.pass)
+                        } ?: Route.Connect
+                    }
+                    var route by remember { mutableStateOf<Route>(startRoute) }
                     when (val r = route) {
                         is Route.Connect -> ConnectScreen(
                             onOpenLive = { h, p, u, pw -> route = Route.Live(h, p, u, pw) },
