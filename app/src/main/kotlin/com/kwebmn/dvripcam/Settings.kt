@@ -42,6 +42,7 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
     var pirEnabled by remember { mutableStateOf(false) }
     var pirSens by remember { mutableStateOf(0f) }
     var motionEnabled by remember { mutableStateOf(false) }
+    var img by remember { mutableStateOf<DvripClient.ImageParam?>(null) }
 
     // helper: одно соединение на операцию
     fun withClient(block: suspend (DvripClient) -> Unit) {
@@ -77,6 +78,7 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
             camName = runCatching { c.getChannelTitle() }.getOrNull() ?: ""
             runCatching { c.getPir() }.getOrNull()?.let { (en, s) -> pirEnabled = en; pirSens = s.toFloat() }
             motionEnabled = runCatching { c.getMotionEnabled() }.getOrNull() ?: false
+            img = runCatching { c.getImageParam() }.getOrNull()
             loaded = true
             status = "Готово"
         }
@@ -104,6 +106,17 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
         val ok = c.setMotionEnabled(en)
         if (ok) motionEnabled = en
         status = if (ok) "Детекция движения: ${if (en) "вкл" else "выкл"}" else "Не удалось изменить детекцию"
+    }
+
+    fun applyImage(n: DvripClient.ImageParam) = withClient { c ->
+        val ok = c.setImageParam(n)
+        if (ok) img = n
+        status = if (ok) "Изображение сохранено" else "Не удалось изменить изображение"
+    }
+
+    fun rebootCam() = withClient { c ->
+        val ok = c.reboot()
+        status = if (ok) "Команда перезагрузки отправлена — камера уходит в ребут…" else "Не удалось перезагрузить"
     }
 
     fun applyNat(enable: Boolean) = withClient { c ->
@@ -184,6 +197,43 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
             }
         }
 
+        // --- Изображение ---
+        Text("Изображение", style = MaterialTheme.typography.titleMedium)
+        ElevatedCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val p = img
+                if (p == null) {
+                    Text(
+                        if (loaded) "Недоступно на этой камере" else "Загрузка…",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    val en = loaded && !busy
+                    SwitchRow("Зеркало (по горизонтали)", p.mirror, en) { applyImage(p.copy(mirror = it)) }
+                    SwitchRow("Переворот (по вертикали)", p.flip, en) { applyImage(p.copy(flip = it)) }
+                    SwitchRow("Компенсация засветки (BLC)", p.blc, en) { applyImage(p.copy(blc = it)) }
+                    SwitchRow("Коридорный режим (90°)", p.corridor, en) { applyImage(p.copy(corridor = it)) }
+                    SwitchRow("Стабилизация (DIS)", p.dis, en) { applyImage(p.copy(dis = it)) }
+                    SwitchRow("Ночной супер-режим (LowLux)", p.lowLux, en) { applyImage(p.copy(lowLux = it)) }
+                    HorizontalDivider()
+                    Text("Режим день/ночь", style = MaterialTheme.typography.bodyMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Авто", "Цвет", "Ч/Б").forEachIndexed { i, lbl ->
+                            FilterChip(selected = p.dayNight == i, enabled = en,
+                                onClick = { applyImage(p.copy(dayNight = i)) }, label = { Text(lbl) })
+                        }
+                    }
+                    Text("Антимерцание", style = MaterialTheme.typography.bodyMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Выкл", "50 Гц", "60 Гц").forEachIndexed { i, lbl ->
+                            FilterChip(selected = p.antiFlicker == i, enabled = en,
+                                onClick = { applyImage(p.copy(antiFlicker = i)) }, label = { Text(lbl) })
+                        }
+                    }
+                }
+            }
+        }
+
         Text("Приватность (де-китаизация)", style = MaterialTheme.typography.titleMedium)
 
         ElevatedCard {
@@ -213,6 +263,18 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
 
         Text("Wi-Fi камеры: $wifiSsid", style = MaterialTheme.typography.bodyMedium)
 
+        // --- Обслуживание ---
+        Text("Обслуживание", style = MaterialTheme.typography.titleMedium)
+        ElevatedCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedButton(onClick = { rebootCam() }, enabled = loaded && !busy) {
+                    Text("Перезагрузить камеру")
+                }
+                Text("Камера уйдёт в ребут на ~30–60 сек и переподключится.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            }
+        }
+
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         Text(status, style = MaterialTheme.typography.bodySmall)
         Text(
@@ -220,5 +282,14 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
                 "продолжит работать. Чтобы полностью отрезать камеру от интернета — заблокируй её на роутере.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
         )
+    }
+}
+
+/** Строка «текст + переключатель» для секции изображения. */
+@Composable
+private fun SwitchRow(label: String, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.weight(1f))
+        Switch(checked = checked, enabled = enabled, onCheckedChange = onChange)
     }
 }

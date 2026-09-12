@@ -65,6 +65,11 @@
 - **AVEnc.VideoColor** — яркость/контраст/насыщенность/оттенок по расписанию.
 - **AVEnc.VideoWidget** — **OSD**: `ChannelTitle` (сейчас «Camera1»), позиция времени/титула (RelativePos 0-8192), **Covers = приватные маски (4 зоны)**, цвета/прозрачность.
 - **Camera.Param / ParamEx / ClearFog** — ISP: экспозиция, день/ночь, шумодав, WDR, антитуман.
+  Реально прочитанные поля (проверено на камере, get 1042 / set 1040, read-modify-write массива `[0]`):
+  - `Camera.Param[0]`: `PictureMirror`/`PictureFlip`/`BLCMode`/`DayNightColor` (hex-строки "0x00000000"),
+    `RejectFlicker` (int 0=выкл/1=50Гц/2=60Гц), `DncThr`, `IRCUTMode`, `AeSensitivity`, `WhiteBalance`.
+  - `Camera.ParamEx[0]`: `CorridorMode`, `Dis` (стабилизация), `Ldc`, `LowLuxMode`, `BroadTrends` (WDR) — **int 0/1**.
+  → В приложении раздел «Изображение»: зеркало/переворот/BLC/день-ночь/антимерцание/коридор/DIS/LowLux.
 - **EncodeCapability** (ability) — маски поддерживаемых разрешений/кодеков (ResolutionMask `0xCBEFFFFF` для Main).
 
 ### Детекция и тревоги
@@ -102,7 +107,7 @@
 
 1. **Живое видео + звук** — OPMonitor (1413→1410), Main/Extra поток.
 2. **Архив с SD** — OPFileQuery (1440) список + OPPlayBack (1424→1420) скачивание/просмотр с перемоткой.
-3. **Двусторонний звук** — OPTalk (1434/1436), G711.
+3. **Двусторонний звук** — OPTalk (Claim 1434 → Start 1430), аудио телефон→камера на **1432** (проверено: 1436=тишина), G711.
 4. **Настройка WiFi** — SET NetWork.Wifi (онбординг через SoftAP `camera_`/`1234567890`).
 5. **Отвязка от Китая** — SET NetWork.Nat `NatEnable=false` + NetWork.PMS `Enable=false`.
 6. **Кодек/качество** — SET Simplify.Encode (разрешение/FPS/битрейт).
@@ -111,6 +116,11 @@
 9. **Время** — OPTimeSetting + NTP.
 10. **Пользователи** — Users/Groups/Authority (сменить пароль, добавить юзера).
 11. **Поиск камеры в сети** — слушать UDP broadcast **34569** (камера сама шлёт NetCommon-JSON).
+12. **Изображение** — GET/SET Camera.Param + Camera.ParamEx (зеркало/переворот/день-ночь/антимерцание/BLC/коридор/DIS/LowLux).
+13. **Перезагрузка** — OPMachine (1450) `{"Action":"Reboot"}`.
+14. **Журнал событий** — OPLogQuery (**1442**, Ret 100 подтверждён; формат запроса требует Type/BeginTime/EndTime).
+
+> Полный справочник опкодов, ~120 config-секций и Ret-кодов (из дизасма XMEye 1.6.2.9) — в `/root/camera/XMEYE-DEX-REFERENCE.md`.
 
 ## 6. Важные оговорки для приложения
 - **Батарейный сон**: перед любой операцией камеру надо разбудить (PIR/питание; сетевой побудки нет). В SoftAP-режиме (онбординг) она бодрствует.

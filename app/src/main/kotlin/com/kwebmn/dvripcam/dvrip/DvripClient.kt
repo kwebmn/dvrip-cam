@@ -188,6 +188,83 @@ class DvripClient(
         return resp.optInt("Ret", -1).let { it == 100 || it == 0 }
     }
 
+    // ---- Изображение (Camera.Param / Camera.ParamEx) ----
+
+    /**
+     * Параметры изображения. Часть полей камера хранит как hex-строки ("0x00000001"),
+     * часть — как обычные int; см. get/set ниже.
+     * dayNight: 0=Авто, 1=Цвет, 2=Ч/Б. antiFlicker: 0=Выкл, 1=50 Гц, 2=60 Гц.
+     */
+    data class ImageParam(
+        val mirror: Boolean, val flip: Boolean,
+        val dayNight: Int, val antiFlicker: Int, val blc: Boolean,
+        val corridor: Boolean, val dis: Boolean, val lowLux: Boolean,
+    )
+
+    private fun asBool(o: JSONObject, k: String): Boolean = when (val v = o.opt(k)) {
+        is Boolean -> v
+        is Number -> v.toInt() != 0
+        is String -> runCatching { java.lang.Long.decode(v).toInt() }.getOrDefault(0) != 0
+        else -> false
+    }
+
+    private fun asInt(o: JSONObject, k: String): Int = when (val v = o.opt(k)) {
+        is Number -> v.toInt()
+        is String -> runCatching { java.lang.Long.decode(v).toInt() }.getOrDefault(0)
+        else -> 0
+    }
+
+    private fun hx(b: Boolean) = if (b) "0x00000001" else "0x00000000"
+    private fun hx(n: Int) = "0x%08X".format(n)
+
+    /** Прочитать параметры изображения (Camera.Param + Camera.ParamEx). null если недоступно. */
+    suspend fun getImageParam(): ImageParam? {
+        val p = getConfig("Camera.Param").optJSONArray("Camera.Param")?.optJSONObject(0) ?: return null
+        val ex = getConfig("Camera.ParamEx").optJSONArray("Camera.ParamEx")?.optJSONObject(0)
+        return ImageParam(
+            mirror = asBool(p, "PictureMirror"),
+            flip = asBool(p, "PictureFlip"),
+            dayNight = asInt(p, "DayNightColor"),
+            antiFlicker = asInt(p, "RejectFlicker"),
+            blc = asBool(p, "BLCMode"),
+            corridor = ex?.let { asBool(it, "CorridorMode") } ?: false,
+            dis = ex?.let { asBool(it, "Dis") } ?: false,
+            lowLux = ex?.let { asBool(it, "LowLuxMode") } ?: false,
+        )
+    }
+
+    /** Записать параметры изображения. Read-modify-write обеих секций. */
+    suspend fun setImageParam(v: ImageParam): Boolean {
+        val arr = getConfig("Camera.Param").optJSONArray("Camera.Param") ?: return false
+        val o = arr.optJSONObject(0) ?: return false
+        o.put("PictureMirror", hx(v.mirror)).put("PictureFlip", hx(v.flip))
+            .put("DayNightColor", hx(v.dayNight)).put("BLCMode", hx(v.blc))
+            .put("RejectFlicker", v.antiFlicker)
+        val r1 = request(MessageIds.CONFIG_SET, JSONObject().put("Name", "Camera.Param").put("Camera.Param", arr))
+        val ok1 = r1.optInt("Ret", -1).let { it == 100 || it == 0 }
+        val exArr = getConfig("Camera.ParamEx").optJSONArray("Camera.ParamEx")
+        val ok2 = if (exArr?.optJSONObject(0) != null) {
+            exArr.getJSONObject(0)
+                .put("CorridorMode", if (v.corridor) 1 else 0)
+                .put("Dis", if (v.dis) 1 else 0)
+                .put("LowLuxMode", if (v.lowLux) 1 else 0)
+            val r2 = request(MessageIds.CONFIG_SET, JSONObject().put("Name", "Camera.ParamEx").put("Camera.ParamEx", exArr))
+            r2.optInt("Ret", -1).let { it == 100 || it == 0 }
+        } else true
+        return ok1 && ok2
+    }
+
+    /** Перезагрузить камеру (OPMachine Reboot). true = команда принята (ответ может не прийти — камера уходит в ребут). */
+    suspend fun reboot(): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            request(
+                MessageIds.OP_MACHINE,
+                JSONObject().put("Name", "OPMachine")
+                    .put("OPMachine", JSONObject().put("Action", "Reboot")),
+            )
+        }.getOrNull()?.optInt("Ret", -1)?.let { it == 100 || it == 0 } ?: true
+    }
+
     /** Прочитать один сырой пакет (без разбора JSON): (msgId, тело). */
     private fun recvRaw(): Pair<Int, ByteArray> {
         val inp = input ?: error("not connected")

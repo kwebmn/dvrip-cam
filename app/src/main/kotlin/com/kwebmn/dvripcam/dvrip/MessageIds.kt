@@ -18,7 +18,9 @@ object MessageIds {
     // Аудио телефон→камера идёт на 1432 (проверено на камере: 1436 = тишина, 1432 = звук из динамика).
     const val TALK_DATA = 1432
     const val FILE_QUERY = 1440
+    const val LOG_QUERY = 1442      // OPLogQuery (проверено на камере: Ret 100)
     const val TIME_SETTING = 1450
+    const val OP_MACHINE = 1450     // OPMachine: reboot/shutdown/reset (тот же опкод, что TIME_SETTING)
     const val TIME_QUERY = 1452
     const val USERS = 1472
 }

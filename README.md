@@ -44,6 +44,8 @@ Implemented:
 - 🔊 Live audio — Sofia/DHAV demux + **G.711** (A-law/µ-law) → `AudioTrack`
 - 🗂️ SD-card archive — browse recordings by date (motion `[A]` / continuous `[R]`), play back over DVRIP `OPPlayBack`
 - ⚙️ Privacy screen — disable Xiongmai cloud (`NetWork.Nat`, secu100.net) and push (`NetWork.PMS`, push.umeye.cn)
+- 🖼️ Image controls — mirror/flip, day-night mode, anti-flicker, BLC, corridor, DIS, low-lux (`Camera.Param`/`ParamEx`)
+- 🔧 Camera reboot (`OPMachine`), OSD name, PIR & motion, time sync
 - ⏳ Battery-aware connect — waits for the sleeping camera to wake (trigger motion), then holds the stream
 - ⬆️ In-app self-update from GitHub Releases
 
