@@ -14,6 +14,7 @@ import android.view.SurfaceView
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -28,8 +29,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -96,14 +99,32 @@ private suspend fun storageStartDate(c: DvripClient): LocalDate? {
     return parseTs(startStr)?.toLocalDate()
 }
 
-/** Одна строка списка записи. */
+/** Одна строка списка записи. [thumbPath] — JPEG-превью, [requestThumb] — заказать генерацию. */
 @Composable
-private fun RecordingRow(f: RecordingFile, onPlay: () -> Unit) {
+private fun RecordingRow(
+    f: RecordingFile,
+    thumbPath: String? = null,
+    requestThumb: (suspend () -> Unit)? = null,
+    onPlay: () -> Unit,
+) {
+    if (requestThumb != null && thumbPath == null) {
+        LaunchedEffect(f.name) { requestThumb() }
+    }
     ListItem(
         modifier = Modifier.clickable { onPlay() },
         leadingContent = {
-            Text(if (f.isAlarm) "🏃" else "⏺",
-                color = if (f.isAlarm) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary)
+            val bmp = remember(thumbPath) {
+                thumbPath?.let { runCatching { android.graphics.BitmapFactory.decodeFile(it) }.getOrNull() }
+            }
+            if (bmp != null) {
+                Image(
+                    bitmap = bmp.asImageBitmap(), contentDescription = null,
+                    modifier = Modifier.size(64.dp, 36.dp), contentScale = ContentScale.Crop,
+                )
+            } else {
+                Text(if (f.isAlarm) "🏃" else "⏺",
+                    color = if (f.isAlarm) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary)
+            }
         },
         headlineContent = { Text("${f.begin.takeLast(8)} → ${f.end.takeLast(8)}") },
         supportingContent = { Text("длительность ${fmtDur(durationSec(f))}") },
@@ -124,7 +145,9 @@ fun ArchiveScreen(
 
     var mode by rememberSaveable { mutableStateOf("all") }   // "all" | "day"
     var motionOnly by rememberSaveable { mutableStateOf(false) }
+    var thumbs by rememberSaveable { mutableStateOf(false) } // превью: генерим сами, поэтому по желанию
     var status by remember { mutableStateOf("") }
+    val thumbStore = remember(host, port) { ThumbStore(ctx, host, port, user, pass) }
 
     // --- режим «По дням» ---
     var day by rememberSaveable { mutableStateOf(today.toString()) }
@@ -205,6 +228,7 @@ fun ArchiveScreen(
             FilterChip(mode == "day", { mode = "day" }, { Text("По дням") })
             Spacer(Modifier.weight(1f))
             FilterChip(motionOnly, { motionOnly = !motionOnly }, { Text("Движение") })
+            FilterChip(thumbs, { thumbs = !thumbs }, { Text("Превью") })
         }
 
         if (mode == "day") {
@@ -226,7 +250,13 @@ fun ArchiveScreen(
         if (mode == "day") {
             val shown = if (motionOnly) files.filter { it.isAlarm } else files
             LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-                items(shown, key = { it.name }) { f -> RecordingRow(f) { onPlay(f) } }
+                items(shown, key = { it.name }) { f ->
+                    RecordingRow(
+                        f,
+                        thumbPath = if (thumbs) thumbStore.ready[f.name] else null,
+                        requestThumb = if (thumbs) suspend { thumbStore.request(f, wifiSf) } else null,
+                    ) { onPlay(f) }
+                }
             }
         } else {
             LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
@@ -238,7 +268,13 @@ fun ArchiveScreen(
                                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp))
                             HorizontalDivider()
                         }
-                        items(gf, key = { it.name }) { f -> RecordingRow(f) { onPlay(f) } }
+                        items(gf, key = { it.name }) { f ->
+                            RecordingRow(
+                                f,
+                                thumbPath = if (thumbs) thumbStore.ready[f.name] else null,
+                                requestThumb = if (thumbs) suspend { thumbStore.request(f, wifiSf) } else null,
+                            ) { onPlay(f) }
+                        }
                     }
                 }
                 item(key = "footer") {
