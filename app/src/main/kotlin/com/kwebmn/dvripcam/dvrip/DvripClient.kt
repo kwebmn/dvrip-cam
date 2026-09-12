@@ -391,6 +391,21 @@ class DvripClient(
         }
     }
 
+    /**
+     * Горячее переключение потока в уже живом соединении (fire-and-forget): Stop(old) + Claim/Start(new).
+     * Ответы (JSON-контрол) прочитает и пропустит цикл runMonitor. Медиа продолжит идти уже новым типом.
+     */
+    suspend fun switchStream(oldType: String, newType: String) = withContext(Dispatchers.IO) {
+        fun param(t: String) = JSONObject()
+            .put("Channel", 0).put("CombinMode", "NONE").put("StreamType", t).put("TransMode", "TCP")
+        frame(MessageIds.MONITOR_START, JSONObject().put("Name", "OPMonitor").put("SessionID", sessionHex)
+            .put("OPMonitor", JSONObject().put("Action", "Stop").put("Parameter", param(oldType))))
+        frame(MessageIds.MONITOR_CLAIM, JSONObject().put("Name", "OPMonitor").put("SessionID", sessionHex)
+            .put("OPMonitor", JSONObject().put("Action", "Claim").put("Parameter", param(newType))))
+        frame(MessageIds.MONITOR_START, JSONObject().put("Name", "OPMonitor").put("SessionID", sessionHex)
+            .put("OPMonitor", JSONObject().put("Action", "Start").put("Parameter", param(newType))))
+    }
+
     /** Список записей на SD за интервал [begin]..[end] (формат "YYYY-MM-DD HH:MM:SS"). Лимит ~64/запрос. */
     suspend fun queryFiles(begin: String, end: String): List<RecordingFile> = withContext(Dispatchers.IO) {
         val q = JSONObject()
