@@ -21,6 +21,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -85,6 +86,32 @@ private suspend fun listDay(client: DvripClient, day: LocalDate): List<Recording
     return out.values.sortedBy { it.begin }
 }
 
+/** Группа записей за один день (для режима «Все»). */
+private data class DayGroup(val date: LocalDate, val files: List<RecordingFile>)
+
+/** Дата начала записей на SD (из StorageInfo span) — граница для режима «Все». */
+private suspend fun storageStartDate(c: DvripClient): LocalDate? {
+    val span = runCatching { c.storageInfo() }.getOrNull()?.third ?: return null
+    val startStr = span.substringBefore('…').trim().ifBlank { return null }
+    return parseTs(startStr)?.toLocalDate()
+}
+
+/** Одна строка списка записи. */
+@Composable
+private fun RecordingRow(f: RecordingFile, onPlay: () -> Unit) {
+    ListItem(
+        modifier = Modifier.clickable { onPlay() },
+        leadingContent = {
+            Text(if (f.isAlarm) "🏃" else "⏺",
+                color = if (f.isAlarm) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary)
+        },
+        headlineContent = { Text("${f.begin.takeLast(8)} → ${f.end.takeLast(8)}") },
+        supportingContent = { Text("длительность ${fmtDur(durationSec(f))}") },
+        trailingContent = { Text(if (f.isAlarm) "движение" else "запись", style = MaterialTheme.typography.labelSmall) },
+    )
+    HorizontalDivider()
+}
+
 @Composable
 fun ArchiveScreen(
     host: String, port: Int, user: String, pass: String,
@@ -93,35 +120,32 @@ fun ArchiveScreen(
     val ctx = LocalContext.current
     val wifiSf = remember { wifiSocketFactory(ctx) }
     val today = remember { LocalDate.now() }
-    var day by rememberSaveable { mutableStateOf(today.toString()) }
-    var status by remember { mutableStateOf("Выбери день") }
-    var files by remember { mutableStateOf<List<RecordingFile>>(emptyList()) }
-    var loading by remember { mutableStateOf(false) }
-    var motionOnly by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    fun load() {
-        if (loading) return
-        loading = true; files = emptyList(); status = "Подключаюсь…"
+    var mode by rememberSaveable { mutableStateOf("all") }   // "all" | "day"
+    var motionOnly by rememberSaveable { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
+
+    // --- режим «По дням» ---
+    var day by rememberSaveable { mutableStateOf(today.toString()) }
+    var files by remember { mutableStateOf<List<RecordingFile>>(emptyList()) }
+    var loadingDay by remember { mutableStateOf(false) }
+
+    fun loadDay() {
+        if (loadingDay) return
+        loadingDay = true; files = emptyList(); status = "Загружаю $day …"
         scope.launch(Dispatchers.IO) {
             val client = DvripClient(host, port)
             try {
                 if (!client.connectAwait(user, pass, wifiSf) { status = it }) return@launch
-                status = "Загружаю $day …"
-                val d = runCatching { LocalDate.parse(day) }.getOrNull()
-                if (d == null) { status = "Неверная дата"; return@launch }
-                val list = listDay(client, d)
-                files = list
-                status = "Записей за $day: ${list.size}"
-            } catch (e: Exception) {
-                status = "Ошибка: ${e.message}"
-            } finally {
-                runCatching { client.close() }; loading = false
-            }
+                val d = runCatching { LocalDate.parse(day) }.getOrNull() ?: return@launch
+                files = listDay(client, d)
+                status = "Записей за $day: ${files.size}"
+            } catch (e: Exception) { status = "Ошибка: ${e.message}" }
+            finally { runCatching { client.close() }; loadingDay = false }
         }
     }
-
-    LaunchedEffect(day) { load() }
+    LaunchedEffect(day, mode) { if (mode == "day") loadDay() }
 
     fun pickDate() {
         val d = runCatching { LocalDate.parse(day) }.getOrDefault(today)
@@ -129,44 +153,103 @@ fun ArchiveScreen(
             d.year, d.monthValue - 1, d.dayOfMonth).show()
     }
 
-    val shown = if (motionOnly) files.filter { it.isAlarm } else files
+    // --- режим «Все» ---
+    val groups = remember { mutableStateListOf<DayGroup>() }
+    var cursor by remember { mutableStateOf(today) }         // следующий день для попытки
+    var storageStart by remember { mutableStateOf<LocalDate?>(null) }
+    var loadingMore by remember { mutableStateOf(false) }
+    var reachedEnd by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+
+    fun loadMoreAll() {
+        if (loadingMore || reachedEnd) return
+        loadingMore = true; status = "Загружаю…"
+        scope.launch(Dispatchers.IO) {
+            val client = DvripClient(host, port)
+            try {
+                if (!client.connectAwait(user, pass, wifiSf) { status = it }) return@launch
+                if (storageStart == null) storageStart = storageStartDate(client)
+                val floor = storageStart ?: today.minusYears(5)
+                var d = cursor
+                var addedNonEmpty = 0; var scanned = 0
+                while (!d.isBefore(floor) && addedNonEmpty < 2 && scanned < 21) {
+                    val list = listDay(client, d)
+                    if (list.isNotEmpty()) { groups.add(DayGroup(d, list)); addedNonEmpty++ }
+                    d = d.minusDays(1); scanned++
+                }
+                cursor = d
+                if (d.isBefore(floor)) reachedEnd = true
+                status = "Дней с записями: ${groups.size}" + if (reachedEnd) " (все)" else ""
+            } catch (e: Exception) { status = "Ошибка: ${e.message}" }
+            finally { runCatching { client.close() }; loadingMore = false }
+        }
+    }
+    LaunchedEffect(mode) { if (mode == "all" && groups.isEmpty()) loadMoreAll() }
+    // подгрузка при прокрутке к концу
+    LaunchedEffect(listState, mode) {
+        if (mode != "all") return@LaunchedEffect
+        snapshotFlow {
+            val info = listState.layoutInfo
+            (info.visibleItemsInfo.lastOrNull()?.index ?: 0) to info.totalItemsCount
+        }.collect { (last, total) -> if (total > 0 && last >= total - 3) loadMoreAll() }
+    }
 
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = onBack) { Text("← Назад") }
             Text("Архив (SD)", style = MaterialTheme.typography.titleLarge)
         }
-        // навигация по дням
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            TextButton(onClick = { day = LocalDate.parse(day).minusDays(1).toString() }) { Text("◀") }
-            OutlinedButton(onClick = { pickDate() }, modifier = Modifier.weight(1f)) { Text(day) }
-            TextButton(
-                onClick = { day = LocalDate.parse(day).plusDays(1).toString() },
-                enabled = LocalDate.parse(day).isBefore(today),
-            ) { Text("▶") }
-        }
+        // переключатель режима
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(day == today.toString(), { day = today.toString() }, { Text("Сегодня") })
-            FilterChip(day == today.minusDays(1).toString(), { day = today.minusDays(1).toString() }, { Text("Вчера") })
+            FilterChip(mode == "all", { mode = "all" }, { Text("Все записи") })
+            FilterChip(mode == "day", { mode = "day" }, { Text("По дням") })
             Spacer(Modifier.weight(1f))
             FilterChip(motionOnly, { motionOnly = !motionOnly }, { Text("Движение") })
         }
+
+        if (mode == "day") {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { day = LocalDate.parse(day).minusDays(1).toString() }) { Text("◀") }
+                OutlinedButton(onClick = { pickDate() }, modifier = Modifier.weight(1f)) { Text(day) }
+                TextButton(onClick = { day = LocalDate.parse(day).plusDays(1).toString() },
+                    enabled = LocalDate.parse(day).isBefore(today)) { Text("▶") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(day == today.toString(), { day = today.toString() }, { Text("Сегодня") })
+                FilterChip(day == today.minusDays(1).toString(), { day = today.minusDays(1).toString() }, { Text("Вчера") })
+            }
+        }
+
         Text(status, style = MaterialTheme.typography.bodySmall)
-        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-            items(shown) { f ->
-                val begHms = f.begin.takeLast(8); val endHms = f.end.takeLast(8)
-                ListItem(
-                    modifier = Modifier.clickable { onPlay(f) },
-                    leadingContent = {
-                        Text(if (f.isAlarm) "🏃" else "⏺",
-                            color = if (f.isAlarm) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary)
-                    },
-                    headlineContent = { Text("$begHms → $endHms") },
-                    supportingContent = { Text("длительность ${fmtDur(durationSec(f))}") },
-                    trailingContent = { Text(if (f.isAlarm) "движение" else "запись", style = MaterialTheme.typography.labelSmall) },
-                )
-                HorizontalDivider()
+        if (loadingDay || (loadingMore && groups.isEmpty())) LinearProgressIndicator(Modifier.fillMaxWidth())
+
+        if (mode == "day") {
+            val shown = if (motionOnly) files.filter { it.isAlarm } else files
+            LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                items(shown, key = { it.name }) { f -> RecordingRow(f) { onPlay(f) } }
+            }
+        } else {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
+                groups.forEach { g ->
+                    val gf = if (motionOnly) g.files.filter { it.isAlarm } else g.files
+                    if (gf.isNotEmpty()) {
+                        item(key = "h_${g.date}") {
+                            Text("${g.date} · ${gf.size}", style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp))
+                            HorizontalDivider()
+                        }
+                        items(gf, key = { it.name }) { f -> RecordingRow(f) { onPlay(f) } }
+                    }
+                }
+                item(key = "footer") {
+                    Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
+                        when {
+                            loadingMore -> CircularProgressIndicator()
+                            reachedEnd -> Text("Это все записи на камере", style = MaterialTheme.typography.bodySmall)
+                            else -> TextButton(onClick = { loadMoreAll() }) { Text("Загрузить ещё") }
+                        }
+                    }
+                }
             }
         }
     }
