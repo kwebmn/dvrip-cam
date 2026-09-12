@@ -15,8 +15,8 @@ android {
         applicationId = "com.kwebmn.dvripcam"
         minSdk = 26
         targetSdk = 34
-        versionCode = 26
-        versionName = "0.1.25"
+        versionCode = 27
+        versionName = "0.1.26"
         buildConfigField("String", "GITHUB_REPO", "\"kwebmn/dvrip-cam\"")
     }
 
