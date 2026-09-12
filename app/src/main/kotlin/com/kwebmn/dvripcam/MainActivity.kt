@@ -147,11 +147,15 @@ private fun ConnectScreen(
             onClick = {
                 if (scanning) return@OutlinedButton
                 scanning = true; found = emptyList(); status = "Ищу камеры в сети…"
+                val sf = wifiSocketFactory(activity)
                 activity.lifecycleScope.launch {
                     val acc = LinkedHashMap<String, FoundCamera>()
-                    Discovery.scan(activity, durationMs = 6000) { cam ->
-                        acc[cam.host] = cam; found = acc.values.toList()
-                    }
+                    fun add(cam: FoundCamera) { acc[cam.host] = cam; found = acc.values.toList() }
+                    // 1) быстрый UDP-анонс (если камера его шлёт)
+                    Discovery.scan(activity, durationMs = 3000) { add(it) }
+                    // 2) надёжный скан подсети по DVRIP-порту 34567
+                    status = "Сканирую сеть (порт 34567)…"
+                    Discovery.scanSubnet(sf) { add(it) }
                     scanning = false
                     status = if (found.isEmpty())
                         "Камеры не найдены. Разбуди камеру движением и повтори."
