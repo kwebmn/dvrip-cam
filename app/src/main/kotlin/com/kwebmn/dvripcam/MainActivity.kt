@@ -3,7 +3,6 @@ package com.kwebmn.dvripcam
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -11,16 +10,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.kwebmn.dvripcam.dvrip.DvripClient
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -28,23 +27,29 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    // Авто-старт: если есть сохранённая камера — сразу открываем её Live.
+                    // Авто-старт: есть сохранённая камера — сразу её Live; иначе — список.
                     val startRoute = remember {
                         CameraStore(this@MainActivity).list().lastOrNull()?.let {
                             Route.Live(it.host, it.port, it.user, it.pass)
-                        } ?: Route.Connect
+                        } ?: Route.Home
                     }
                     var route by remember { mutableStateOf<Route>(startRoute) }
                     when (val r = route) {
-                        is Route.Connect -> ConnectScreen(
-                            onOpenLive = { h, p, u, pw -> route = Route.Live(h, p, u, pw) },
-                            onOpenArchive = { h, p, u, pw -> route = Route.Archive(h, p, u, pw) },
-                            onOpenSettings = { h, p, u, pw -> route = Route.Settings(h, p, u, pw) },
+                        is Route.Home -> HomeScreen(
+                            onLive = { c -> route = Route.Live(c.host, c.port, c.user, c.pass) },
+                            onArchive = { c -> route = Route.Archive(c.host, c.port, c.user, c.pass) },
+                            onSettings = { c -> route = Route.Settings(c.host, c.port, c.user, c.pass) },
+                            onEdit = { c -> route = Route.EditCamera(c) },
+                            onAdd = { prefill -> route = Route.EditCamera(prefill) },
                         )
-                        is Route.Live -> LiveScreen(r.host, r.port, r.user, r.pass) { route = Route.Connect }
+                        is Route.EditCamera -> EditCameraScreen(
+                            existing = r.existing,
+                            onDone = { route = Route.Home },
+                        )
+                        is Route.Live -> LiveScreen(r.host, r.port, r.user, r.pass) { route = Route.Home }
                         is Route.Archive -> ArchiveScreen(
                             r.host, r.port, r.user, r.pass,
-                            onBack = { route = Route.Connect },
+                            onBack = { route = Route.Home },
                             onPlay = { f -> route = Route.Playback(r.host, r.port, r.user, r.pass, f) },
                         )
                         is Route.Playback -> PlaybackScreen(
@@ -53,7 +58,7 @@ class MainActivity : ComponentActivity() {
                         )
                         is Route.Settings -> SettingsScreen(
                             r.host, r.port, r.user, r.pass,
-                            onBack = { route = Route.Connect },
+                            onBack = { route = Route.Home },
                         )
                     }
                 }
@@ -63,7 +68,8 @@ class MainActivity : ComponentActivity() {
 }
 
 sealed interface Route {
-    object Connect : Route
+    object Home : Route
+    data class EditCamera(val existing: CameraEntry?) : Route
     data class Live(val host: String, val port: Int, val user: String, val pass: String) : Route
     data class Archive(val host: String, val port: Int, val user: String, val pass: String) : Route
     data class Settings(val host: String, val port: Int, val user: String, val pass: String) : Route
@@ -73,33 +79,25 @@ sealed interface Route {
     ) : Route
 }
 
+/** Главный экран — список камер с действиями, добавление и поиск. */
 @Composable
-private fun ConnectScreen(
-    onOpenLive: (String, Int, String, String) -> Unit,
-    onOpenArchive: (String, Int, String, String) -> Unit,
-    onOpenSettings: (String, Int, String, String) -> Unit,
+private fun HomeScreen(
+    onLive: (CameraEntry) -> Unit,
+    onArchive: (CameraEntry) -> Unit,
+    onSettings: (CameraEntry) -> Unit,
+    onEdit: (CameraEntry) -> Unit,
+    onAdd: (CameraEntry?) -> Unit,
 ) {
-    var host by rememberSaveable { mutableStateOf("192.168.1.10") }
-    var port by rememberSaveable { mutableStateOf("34567") }
-    var user by rememberSaveable { mutableStateOf("admin") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var showPassword by rememberSaveable { mutableStateOf(false) }
-    var status by rememberSaveable { mutableStateOf("Введите данные камеры и нажмите «Подключиться»") }
-    var busy by remember { mutableStateOf(false) }
-    var canLive by rememberSaveable { mutableStateOf(false) }
-    var updCheckMsg by remember { mutableStateOf("") }
-
     val activity = androidx.compose.ui.platform.LocalContext.current as ComponentActivity
-
-    // --- сохранённые камеры ---
     val store = remember { CameraStore(activity) }
-    var saved by remember { mutableStateOf(store.list()) }
+    var cameras by remember { mutableStateOf(store.list()) }
+    var toDelete by remember { mutableStateOf<CameraEntry?>(null) }
 
-    // --- поиск в сети ---
     var scanning by remember { mutableStateOf(false) }
     var found by remember { mutableStateOf<List<FoundCamera>>(emptyList()) }
+    var scanMsg by remember { mutableStateOf("") }
 
-    // --- автообновление из GitHub Releases ---
+    // автообновление
     var update by remember { mutableStateOf<com.kwebmn.dvripcam.update.ReleaseInfo?>(null) }
     var updMsg by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
@@ -108,219 +106,77 @@ private fun ConnectScreen(
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("DVRIP Cam", style = MaterialTheme.typography.headlineMedium)
-        Text("Локальное подключение к камере (DVRIP, порт 34567)", style = MaterialTheme.typography.bodySmall)
-
-        if (saved.isNotEmpty()) {
-            Text("Мои камеры", style = MaterialTheme.typography.labelMedium)
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                saved.forEach { cam ->
-                    InputChip(
-                        selected = host == cam.host && port == cam.port.toString(),
-                        onClick = {
-                            host = cam.host; port = cam.port.toString()
-                            user = cam.user; password = cam.pass
-                            canLive = false
-                            status = "Выбрана «${cam.name}». Нажмите «Подключиться»"
-                        },
-                        label = { Text(cam.name.ifBlank { cam.host }) },
-                        trailingIcon = {
-                            Text("✕", modifier = Modifier.clickable {
-                                store.remove(cam.host, cam.port); saved = store.list()
-                            })
-                        },
-                    )
-                }
-            }
-        }
-
-        OutlinedButton(
-            onClick = {
-                if (scanning) return@OutlinedButton
-                scanning = true; found = emptyList(); status = "Ищу камеры в сети…"
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Камеры", style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = {
+                if (scanning) return@TextButton
+                scanning = true; found = emptyList(); scanMsg = "Ищу в сети…"
                 val sf = wifiSocketFactory(activity)
                 activity.lifecycleScope.launch {
                     val acc = LinkedHashMap<String, FoundCamera>()
-                    fun add(cam: FoundCamera) { acc[cam.host] = cam; found = acc.values.toList() }
-                    // 1) быстрый UDP-анонс (если камера его шлёт)
+                    fun add(c: FoundCamera) { acc[c.host] = c; found = acc.values.toList() }
                     Discovery.scan(activity, durationMs = 3000) { add(it) }
-                    // 2) надёжный скан подсети по DVRIP-порту 34567
-                    status = "Сканирую сеть (порт 34567)…"
+                    scanMsg = "Сканирую сеть…"
                     Discovery.scanSubnet(sf) { add(it) }
                     scanning = false
-                    status = if (found.isEmpty())
-                        "Камеры не найдены. Разбуди камеру движением и повтори."
-                    else "Найдено: ${found.size}"
+                    scanMsg = if (found.isEmpty()) "В сети ничего не найдено" else "Найдено: ${found.size}"
                 }
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(if (scanning) "Поиск…" else "🔎 Найти камеру в сети") }
+            }) { Text("🔎 Найти") }
+            TextButton(onClick = { onAdd(null) }) { Text("➕ Добавить") }
+        }
 
+        if (cameras.isEmpty()) {
+            ElevatedCard(Modifier.fillMaxWidth()) {
+                Text(
+                    "Пока нет камер.\nНажмите «➕ Добавить», чтобы ввести IP/логин, или «🔎 Найти» для поиска в сети.",
+                    Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+
+        cameras.forEach { cam ->
+            CameraCard(
+                cam = cam,
+                onLive = { onLive(cam) },
+                onArchive = { onArchive(cam) },
+                onSettings = { onSettings(cam) },
+                onEdit = { onEdit(cam) },
+                onDelete = { toDelete = cam },
+            )
+        }
+
+        if (scanning || scanMsg.isNotBlank()) {
+            if (scanning) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (scanMsg.isNotBlank()) Text(scanMsg, style = MaterialTheme.typography.bodySmall)
+        }
         if (found.isNotEmpty()) {
+            Text("Найдено в сети (нажмите, чтобы добавить):", style = MaterialTheme.typography.labelMedium)
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                found.forEach { cam ->
+                found.forEach { f ->
                     AssistChip(
-                        onClick = { host = cam.host; canLive = false; status = "Выбрано ${cam.host}" },
-                        label = { Text(cam.name.ifBlank { cam.host }) },
+                        onClick = { onAdd(CameraEntry(f.name.ifBlank { f.host }, f.host, 34567, "admin", "")) },
+                        label = { Text(f.host) },
                     )
                 }
             }
         }
 
-        OutlinedTextField(value = host, onValueChange = { host = it }, label = { Text("IP камеры") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = port, onValueChange = { port = it }, label = { Text("Порт") },
-            singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = user, onValueChange = { user = it }, label = { Text("Логин") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(
-            value = password, onValueChange = { password = it }, label = { Text("Пароль") },
-            singleLine = true,
-            visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = {
-                TextButton(onClick = { showPassword = !showPassword }) {
-                    Text(if (showPassword) "Скрыть" else "Показать")
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Button(
-            onClick = {
-                if (busy) { busy = false; return@Button }   // повторный тап = отмена ожидания
-                busy = true
-                status = "Подключаюсь…"
-                val sf = wifiSocketFactory(activity)
-                val h = host.trim()
-                val p = port.trim().toIntOrNull() ?: 34567
-                activity.lifecycleScope.launch {
-                    val deadline = System.currentTimeMillis() + 60_000
-                    var done = false
-                    while (!done && busy) {
-                        val client = DvripClient(h, p)
-                        try {
-                            client.connect(timeoutMs = 3000, socketFactory = sf)
-                            if (!client.login(user.trim(), password)) {
-                                status = "Ошибка логина (неверный пароль?)"
-                                done = true
-                            } else {
-                                val info: JSONObject = client.systemInfo()
-                                status = buildString {
-                                    appendLine("✅ Подключено")
-                                    appendLine("HardWare: " + info.optString("HardWare", "—"))
-                                    appendLine("Прошивка: " + info.optString("SoftWareVersion", "—"))
-                                    appendLine("Serial: " + info.optString("SerialNo", "—"))
-                                    appendLine("Сборка: " + info.optString("BuildTime", "—"))
-                                }
-                                canLive = true
-                                done = true
-                            }
-                        } catch (e: Exception) {
-                            // камера спит / недоступна — ждём и переспрашиваем
-                            if (System.currentTimeMillis() >= deadline) {
-                                status = "Камера не ответила на $h.\nИщу её в сети (может, сменился IP)…"
-                                done = true
-                                // авто-поиск: вдруг адрес изменился (напр. .25 → .27)
-                                val acc = LinkedHashMap<String, FoundCamera>()
-                                Discovery.scan(activity, durationMs = 6000) { c -> acc[c.host] = c; found = acc.values.toList() }
-                                status = if (found.isEmpty())
-                                    "Камера не ответила на $h и не найдена в сети.\nРазбуди движением (PIR) и повтори."
-                                else "Не ответила на $h. Найдено в сети: ${found.joinToString { it.host }} — выбери камеру выше."
-                            } else {
-                                val left = ((deadline - System.currentTimeMillis()) / 1000)
-                                status = "Жду пробуждения камеры… помаши рукой перед ней ($left с)\n(тап по кнопке — отмена)"
-                                kotlinx.coroutines.delay(2000)
-                            }
-                        } finally {
-                            client.close()
-                        }
-                    }
-                    busy = false
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(if (busy) "Ожидание… (отмена)" else "Подключиться") }
-
-        if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-
-        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-            Text(status, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
-        }
-
-        if (canLive) {
-            Button(
-                onClick = { onOpenLive(host.trim(), port.trim().toIntOrNull() ?: 34567, user.trim(), password) },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("▶ Смотреть Live") }
-            OutlinedButton(
-                onClick = { onOpenArchive(host.trim(), port.trim().toIntOrNull() ?: 34567, user.trim(), password) },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("🗂 Архив (SD)") }
-            OutlinedButton(
-                onClick = { onOpenSettings(host.trim(), port.trim().toIntOrNull() ?: 34567, user.trim(), password) },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("⚙ Настройки / Приватность") }
-            TextButton(
-                onClick = {
-                    val h = host.trim(); val p = port.trim().toIntOrNull() ?: 34567
-                    val existing = saved.firstOrNull { it.host == h && it.port == p }?.name
-                    store.save(CameraEntry(existing?.ifBlank { h } ?: h, h, p, user.trim(), password))
-                    saved = store.list()
-                    status = "Камера сохранена ($h)"
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("💾 Сохранить камеру") }
-        }
-
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Text(
-                "Версия ${com.kwebmn.dvripcam.BuildConfig.VERSION_NAME}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = {
-                updCheckMsg = "Проверяю…"
-                activity.lifecycleScope.launch {
-                    val rel = com.kwebmn.dvripcam.update.Updater.latestRelease()
-                    when {
-                        rel == null -> updCheckMsg = "Не удалось проверить обновления"
-                        com.kwebmn.dvripcam.update.Updater.isNewer(rel.versionName) -> {
-                            update = rel; updCheckMsg = ""
-                        }
-                        else -> updCheckMsg = "У вас последняя версия (${rel.tag})"
-                    }
-                }
-            }) { Text("Проверить обновления") }
-        }
-        if (updCheckMsg.isNotBlank()) {
-            Text(updCheckMsg, style = MaterialTheme.typography.bodySmall)
-        }
-
         update?.let { rel ->
-            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("⬆️ Доступно обновление ${rel.tag}", style = MaterialTheme.typography.titleMedium)
-                    if (rel.changelog.isNotBlank())
-                        Text(rel.changelog.take(400), style = MaterialTheme.typography.bodySmall)
                     if (updMsg.isNotBlank()) Text(updMsg, style = MaterialTheme.typography.bodySmall)
                     Button(onClick = {
                         val u = com.kwebmn.dvripcam.update.Updater
                         if (!u.ensureInstallPermission(activity)) {
-                            updMsg = "Разреши установку приложений из этого источника и нажми снова"
-                            return@Button
+                            updMsg = "Разреши установку из этого источника и нажми снова"; return@Button
                         }
                         updMsg = "Скачиваю…"
                         activity.lifecycleScope.launch {
@@ -328,23 +184,153 @@ private fun ConnectScreen(
                                 val apk = u.downloadApk(activity, rel.apkUrl, rel.apkName) { p ->
                                     updMsg = if (p >= 0) "Скачиваю… $p%" else "Скачиваю…"
                                 }
-                                updMsg = "Запускаю установку…"
-                                u.installApk(activity, apk)
-                            } catch (e: Exception) {
-                                updMsg = "Ошибка обновления: ${e.message}"
-                            }
+                                updMsg = "Установка…"; u.installApk(activity, apk)
+                            } catch (e: Exception) { updMsg = "Ошибка: ${e.message}" }
                         }
                     }) { Text("Обновить до ${rel.tag}") }
                 }
             }
         }
+
+        Text(
+            "Версия ${com.kwebmn.dvripcam.BuildConfig.VERSION_NAME}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+    }
+
+    toDelete?.let { cam ->
+        AlertDialog(
+            onDismissRequest = { toDelete = null },
+            title = { Text("Удалить камеру?") },
+            text = { Text("«${cam.name.ifBlank { cam.host }}» будет удалена из списка.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    store.remove(cam.host, cam.port); cameras = store.list(); toDelete = null
+                }) { Text("Удалить") }
+            },
+            dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Отмена") } },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CameraCard(
+    cam: CameraEntry,
+    onLive: () -> Unit,
+    onArchive: () -> Unit,
+    onSettings: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    ElevatedCard(onClick = onLive, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("📷 ${cam.name.ifBlank { cam.host }}", style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f))
+                Text("▶", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            Text("${cam.host}:${cam.port} · ${cam.user}",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onLive) { Text("▶ Live") }
+                TextButton(onClick = onArchive) { Text("🗂") }
+                TextButton(onClick = onSettings) { Text("⚙") }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onEdit) { Text("✏️") }
+                TextButton(onClick = onDelete) { Text("🗑") }
+            }
+        }
+    }
+}
+
+/** Форма добавления/редактирования камеры. */
+@Composable
+private fun EditCameraScreen(existing: CameraEntry?, onDone: () -> Unit) {
+    val activity = androidx.compose.ui.platform.LocalContext.current as ComponentActivity
+    val store = remember { CameraStore(activity) }
+
+    var name by rememberSaveable { mutableStateOf(existing?.name ?: "") }
+    var host by rememberSaveable { mutableStateOf(existing?.host ?: "192.168.1.10") }
+    var port by rememberSaveable { mutableStateOf((existing?.port ?: 34567).toString()) }
+    var user by rememberSaveable { mutableStateOf(existing?.user ?: "admin") }
+    var password by rememberSaveable { mutableStateOf(existing?.pass ?: "") }
+    var showPass by rememberSaveable { mutableStateOf(false) }
+    var testMsg by remember { mutableStateOf("") }
+    var testing by remember { mutableStateOf(false) }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onDone) { Text("← Назад") }
+            Text(if (existing == null) "Добавить камеру" else "Изменить камеру",
+                style = MaterialTheme.typography.titleLarge)
+        }
+
+        OutlinedTextField(name, { name = it }, label = { Text("Название") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(host, { host = it }, label = { Text("IP камеры") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(port, { port = it }, label = { Text("Порт") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(user, { user = it }, label = { Text("Логин") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            password, { password = it }, label = { Text("Пароль") }, singleLine = true,
+            visualTransformation = if (showPass) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                TextButton(onClick = { showPass = !showPass }) { Text(if (showPass) "Скрыть" else "Показать") }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        OutlinedButton(
+            onClick = {
+                if (testing) return@OutlinedButton
+                testing = true; testMsg = "Проверяю…"
+                val sf = wifiSocketFactory(activity)
+                val h = host.trim(); val p = port.trim().toIntOrNull() ?: 34567
+                activity.lifecycleScope.launch {
+                    val c = DvripClient(h, p)
+                    try {
+                        c.connect(3000, sf)
+                        testMsg = if (c.login(user.trim(), password)) "✅ Подключение успешно" else "❌ Неверный логин/пароль"
+                    } catch (e: Exception) {
+                        testMsg = "❌ Не отвечает (спит?): ${e.message}"
+                    } finally { runCatching { c.close() }; testing = false }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (testing) "Проверка…" else "Проверить подключение") }
+        if (testMsg.isNotBlank()) Text(testMsg, style = MaterialTheme.typography.bodySmall)
+
+        Button(
+            onClick = {
+                val h = host.trim(); val p = port.trim().toIntOrNull() ?: 34567
+                if (h.isBlank()) { testMsg = "Укажите IP камеры"; return@Button }
+                // при смене адреса удаляем старую запись, чтобы не плодить дубли
+                existing?.let { if (it.host != h || it.port != p) store.remove(it.host, it.port) }
+                store.save(CameraEntry(name.trim().ifBlank { h }, h, p, user.trim(), password))
+                onDone()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("💾 Сохранить") }
+
+        if (existing != null) {
+            TextButton(
+                onClick = { store.remove(existing.host, existing.port); onDone() },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("🗑 Удалить камеру", color = MaterialTheme.colorScheme.error) }
+        }
     }
 }
 
 /**
- * SocketFactory, привязанный к текущей Wi-Fi-сети. Гарантирует, что локальное соединение
- * к камере пойдёт через Wi-Fi, даже если включены мобильные данные (иначе Android может
- * маршрутизировать сокет через соту → "No route to host").
+ * SocketFactory, привязанный к текущей Wi-Fi-сети — чтобы локальное соединение шло через
+ * Wi-Fi даже при активных мобильных данных (иначе "No route to host").
  */
 internal fun wifiSocketFactory(context: android.content.Context): javax.net.SocketFactory? {
     val cm = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return null
