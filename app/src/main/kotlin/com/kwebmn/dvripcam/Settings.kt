@@ -1,5 +1,8 @@
 package com.kwebmn.dvripcam
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -9,6 +12,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import com.kwebmn.dvripcam.alarm.AlarmPrefs
+import com.kwebmn.dvripcam.alarm.AlarmService
 import com.kwebmn.dvripcam.dvrip.DvripClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -19,7 +27,11 @@ import org.json.JSONObject
  * и пуш-сервис (NetWork.PMS, push.umeye.cn). Плюс инфо о текущем Wi-Fi.
  */
 @Composable
-fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: () -> Unit) {
+fun SettingsScreen(
+    host: String, port: Int, user: String, pass: String,
+    onBack: () -> Unit,
+    onEventLog: () -> Unit = {},
+) {
     val ctx = LocalContext.current
     val wifiSf = remember { wifiSocketFactory(ctx) }
     val scope = rememberCoroutineScope()
@@ -54,6 +66,28 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
     var encFps by remember { mutableStateOf<Int?>(null) }
     var encBitrate by remember { mutableStateOf(2048) }
     var encRes by remember { mutableStateOf("") }
+    // сторож движения
+    var watchOn by remember { mutableStateOf(AlarmPrefs.enabled(ctx)) }
+
+    fun enableWatch() {
+        AlarmPrefs.setEnabled(ctx, true); AlarmPrefs.setTarget(ctx, "$host:$port")
+        AlarmService.start(ctx); watchOn = true; status = "Сторож движения включён"
+    }
+
+    val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) enableWatch() else { watchOn = false; status = "Нужно разрешение на уведомления" }
+    }
+
+    fun toggleWatch(on: Boolean) {
+        if (!on) {
+            AlarmPrefs.setEnabled(ctx, false); AlarmService.stop(ctx)
+            watchOn = false; status = "Сторож движения выключен"
+            return
+        }
+        val needPerm = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        if (needPerm) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS) else enableWatch()
+    }
 
     // helper: одно соединение на операцию
     fun withClient(block: suspend (DvripClient) -> Unit) {
@@ -388,10 +422,31 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
 
         Text("Wi-Fi камеры: $wifiSsid", style = MaterialTheme.typography.bodyMedium)
 
+        // --- Уведомления о движении ---
+        Text("Уведомления", style = MaterialTheme.typography.titleMedium)
+        ElevatedCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Сторож движения")
+                        Text("Фоновая подписка на тревоги камеры + пуш-уведомления",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(checked = watchOn, onCheckedChange = { on -> toggleWatch(on) })
+                }
+                Text(
+                    "Камера батарейная: из глубокого сна по сети её не разбудить, поэтому события " +
+                        "приходят, пока она бодрствует (её будит движение/PIR).",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+
         // --- Обслуживание ---
         Text("Обслуживание", style = MaterialTheme.typography.titleMedium)
         ElevatedCard {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedButton(onClick = onEventLog) { Text("Журнал событий камеры") }
                 OutlinedButton(onClick = { rebootCam() }, enabled = loaded && !busy) {
                     Text("Перезагрузить камеру")
                 }

@@ -23,4 +23,6 @@ object MessageIds {
     const val OP_MACHINE = 1450     // OPMachine: reboot/shutdown/reset (тот же опкод, что TIME_SETTING)
     const val TIME_QUERY = 1452
     const val USERS = 1472
+    const val GUARD = 1500       // подписка на тревоги (проверено: Ret 100)
+    const val ALARM_INFO = 1504  // камера шлёт AlarmInfo по подписке
 }

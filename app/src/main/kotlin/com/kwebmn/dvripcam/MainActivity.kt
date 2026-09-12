@@ -24,6 +24,10 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Сторож тревог переживает перезапуск приложения, если был включён.
+        if (com.kwebmn.dvripcam.alarm.AlarmPrefs.enabled(this)) {
+            runCatching { com.kwebmn.dvripcam.alarm.AlarmService.start(this) }
+        }
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -59,6 +63,11 @@ class MainActivity : ComponentActivity() {
                         is Route.Settings -> SettingsScreen(
                             r.host, r.port, r.user, r.pass,
                             onBack = { route = Route.Home },
+                            onEventLog = { route = Route.EventLog(r.host, r.port, r.user, r.pass) },
+                        )
+                        is Route.EventLog -> EventLogScreen(
+                            r.host, r.port, r.user, r.pass,
+                            onBack = { route = Route.Settings(r.host, r.port, r.user, r.pass) },
                         )
                     }
                 }
@@ -73,6 +82,7 @@ sealed interface Route {
     data class Live(val host: String, val port: Int, val user: String, val pass: String) : Route
     data class Archive(val host: String, val port: Int, val user: String, val pass: String) : Route
     data class Settings(val host: String, val port: Int, val user: String, val pass: String) : Route
+    data class EventLog(val host: String, val port: Int, val user: String, val pass: String) : Route
     data class Playback(
         val host: String, val port: Int, val user: String, val pass: String,
         val file: com.kwebmn.dvripcam.dvrip.RecordingFile,

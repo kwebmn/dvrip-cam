@@ -451,6 +451,50 @@ class DvripClient(
         }
     }
 
+    // ---- Тревоги (guard) и журнал событий ----
+
+    /** Запись журнала камеры (OPLogQuery). */
+    data class LogEntry(val time: String, val type: String, val user: String, val data: String, val position: Int)
+
+    /**
+     * Пинг сессии (1006). Без него камера рвёт «тихое» соединение —
+     * нужен сторожу тревог, который подолгу просто слушает.
+     */
+    suspend fun keepAlive() = withContext(Dispatchers.IO) {
+        frame(MessageIds.KEEPALIVE, JSONObject().put("Name", "KeepAlive").put("SessionID", sessionHex))
+    }
+
+    /**
+     * Подписаться на тревоги камеры (guard 1500). После успеха камера шлёт AlarmInfo (1504)
+     * в это же соединение. Возвращает true при Ret 100.
+     */
+    suspend fun guard(): Boolean {
+        val resp = request(MessageIds.GUARD, JSONObject().put("Name", ""))
+        return resp.optInt("Ret", -1).let { it == 100 || it == 0 }
+    }
+
+    /**
+     * Журнал событий за период. [position] — курсор пагинации (Position последней записи + 1).
+     * Type="LogAll" — единственный рабочий на этой прошивке (проверено).
+     */
+    suspend fun queryLog(begin: String, end: String, position: Int = 0): List<LogEntry> {
+        val resp = request(
+            MessageIds.LOG_QUERY,
+            JSONObject().put("Name", "OPLogQuery").put("OPLogQuery",
+                JSONObject().put("BeginTime", begin).put("EndTime", end)
+                    .put("LogPosition", position).put("Type", "LogAll")),
+        )
+        val arr = resp.optJSONArray("OPLogQuery") ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            LogEntry(
+                time = o.optString("Time"), type = o.optString("Type"),
+                user = o.optString("User"), data = o.optString("Data"),
+                position = o.optInt("Position", 0),
+            )
+        }
+    }
+
     // ---- Плейбэк по времени (ByTime) с перемоткой ----
 
     private fun pbParam(start: String, end: String) = JSONObject()
