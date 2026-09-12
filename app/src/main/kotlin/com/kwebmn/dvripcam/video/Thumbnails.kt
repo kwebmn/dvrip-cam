@@ -4,6 +4,7 @@ import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -46,7 +47,7 @@ class KeyFrameGrabber {
             val fmt = MediaFormat.createVideoFormat("video/avc", w, h)
             fmt.setByteBuffer("csd-0", ByteBuffer.wrap(s))
             fmt.setByteBuffer("csd-1", ByteBuffer.wrap(p))
-            fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodec.CodecCapabilities.COLOR_FormatYUV420Flexible)
+            fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
             val c = MediaCodec.createDecoderByType("video/avc")
             c.configure(fmt, null, null, 0)   // без Surface — читаем пиксели
             c.start()
