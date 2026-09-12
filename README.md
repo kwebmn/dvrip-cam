@@ -45,7 +45,9 @@ Implemented:
 - 🗂️ SD-card archive — browse recordings by date (motion `[A]` / continuous `[R]`), play back over DVRIP `OPPlayBack`
 - ⚙️ Privacy screen — disable Xiongmai cloud (`NetWork.Nat`, secu100.net) and push (`NetWork.PMS`, push.umeye.cn)
 - 🖼️ Image controls — mirror/flip, day-night mode, anti-flicker, BLC, corridor, DIS, low-lux (`Camera.Param`/`ParamEx`)
-- 🔧 Camera reboot (`OPMachine`), OSD name, PIR & motion, time sync
+- 🔧 Camera reboot (`OPMachine`), OSD name, PIR, time sync
+- 🎚️ Recording mode & clip length (`Record`), motion level + human detection (`Detect.*`)
+- 🎨 Color tuning (`AVEnc.VideoColor`) and main-stream quality FPS/bitrate (`Simplify.Encode`)
 - ⏳ Battery-aware connect — waits for the sleeping camera to wake (trigger motion), then holds the stream
 - ⬆️ In-app self-update from GitHub Releases
 

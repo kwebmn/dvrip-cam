@@ -119,6 +119,10 @@
 12. **Изображение** — GET/SET Camera.Param + Camera.ParamEx (зеркало/переворот/день-ночь/антимерцание/BLC/коридор/DIS/LowLux).
 13. **Перезагрузка** — OPMachine (1450) `{"Action":"Reboot"}`.
 14. **Журнал событий** — OPLogQuery (**1442**, Ret 100 подтверждён; формат запроса требует Type/BeginTime/EndTime).
+15. **Запись на SD** — SET Record: RecordMode `ClosedRecord`/`ConfigRecord`/`ManualRecord` + PacketLength (длина клипа, мин).
+16. **Детекция** — SET Detect.MotionDetect (Enable + Level 1..6) и Detect.HumanDetection (Enable) — проверено Ret 100.
+17. **Цвет изображения** — SET AVEnc.VideoColor[0][0].VideoColorParam: Brightness/Contrast/Saturation/Hue (0..100).
+18. **Качество** — SET Simplify.Encode[0].MainFormat.Video: FPS (1..25) + BitRate (кбит/с).
 
 > Полный справочник опкодов, ~120 config-секций и Ret-кодов (из дизасма XMEye 1.6.2.9) — в `/root/camera/XMEYE-DEX-REFERENCE.md`.
 

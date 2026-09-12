@@ -265,6 +265,90 @@ class DvripClient(
         }.getOrNull()?.optInt("Ret", -1)?.let { it == 100 || it == 0 } ?: true
     }
 
+    // ---- Запись на SD (Record) ----
+
+    /** Режим записи + длина клипа (мин). Режим: ClosedRecord=выкл, ConfigRecord=по расписанию, ManualRecord=всегда. */
+    suspend fun getRecord(): Pair<String, Int>? {
+        val o = getConfig("Record").optJSONArray("Record")?.optJSONObject(0) ?: return null
+        return o.optString("RecordMode", "ConfigRecord") to o.optInt("PacketLength", 3)
+    }
+
+    suspend fun setRecord(mode: String, packetLen: Int): Boolean {
+        val arr = getConfig("Record").optJSONArray("Record") ?: return false
+        arr.optJSONObject(0)?.put("RecordMode", mode)?.put("PacketLength", packetLen.coerceIn(1, 120)) ?: return false
+        val r = request(MessageIds.CONFIG_SET, JSONObject().put("Name", "Record").put("Record", arr))
+        return r.optInt("Ret", -1).let { it == 100 || it == 0 }
+    }
+
+    // ---- Детекция движения (enable + Level 1..6) ----
+
+    suspend fun getMotion(): Pair<Boolean, Int>? {
+        val o = getConfig("Detect.MotionDetect").optJSONArray("Detect.MotionDetect")?.optJSONObject(0) ?: return null
+        return o.optBoolean("Enable", false) to o.optInt("Level", 3)
+    }
+
+    suspend fun setMotion(enable: Boolean, level: Int): Boolean {
+        val arr = getConfig("Detect.MotionDetect").optJSONArray("Detect.MotionDetect") ?: return false
+        arr.optJSONObject(0)?.put("Enable", enable)?.put("Level", level.coerceIn(1, 6)) ?: return false
+        val r = request(MessageIds.CONFIG_SET, JSONObject().put("Name", "Detect.MotionDetect").put("Detect.MotionDetect", arr))
+        return r.optInt("Ret", -1).let { it == 100 || it == 0 }
+    }
+
+    // ---- Детекция человека (Detect.HumanDetection) ----
+
+    suspend fun getHumanDetect(): Boolean? =
+        getConfig("Detect.HumanDetection").optJSONArray("Detect.HumanDetection")?.optJSONObject(0)?.optBoolean("Enable")
+
+    suspend fun setHumanDetect(enable: Boolean): Boolean {
+        val arr = getConfig("Detect.HumanDetection").optJSONArray("Detect.HumanDetection") ?: return false
+        arr.optJSONObject(0)?.put("Enable", enable) ?: return false
+        val r = request(MessageIds.CONFIG_SET, JSONObject().put("Name", "Detect.HumanDetection").put("Detect.HumanDetection", arr))
+        return r.optInt("Ret", -1).let { it == 100 || it == 0 }
+    }
+
+    // ---- Цвет изображения (AVEnc.VideoColor) ----
+
+    /** Яркость/контраст/насыщенность/оттенок, 0..100. */
+    data class VideoColor(val brightness: Int, val contrast: Int, val saturation: Int, val hue: Int)
+
+    /** AVEnc.VideoColor — массив массивов [[{TimeSection..},{..}]]; берём активную секцию [0][0]. */
+    private fun videoColorParam(outer: org.json.JSONArray?): JSONObject? =
+        outer?.optJSONArray(0)?.optJSONObject(0)?.optJSONObject("VideoColorParam")
+
+    suspend fun getVideoColor(): VideoColor? {
+        val p = videoColorParam(getConfig("AVEnc.VideoColor").optJSONArray("AVEnc.VideoColor")) ?: return null
+        return VideoColor(
+            p.optInt("Brightness", 50), p.optInt("Contrast", 50),
+            p.optInt("Saturation", 50), p.optInt("Hue", 50),
+        )
+    }
+
+    suspend fun setVideoColor(v: VideoColor): Boolean {
+        val outer = getConfig("AVEnc.VideoColor").optJSONArray("AVEnc.VideoColor") ?: return false
+        val p = videoColorParam(outer) ?: return false
+        p.put("Brightness", v.brightness.coerceIn(0, 100)).put("Contrast", v.contrast.coerceIn(0, 100))
+            .put("Saturation", v.saturation.coerceIn(0, 100)).put("Hue", v.hue.coerceIn(0, 100))
+        val r = request(MessageIds.CONFIG_SET, JSONObject().put("Name", "AVEnc.VideoColor").put("AVEnc.VideoColor", outer))
+        return r.optInt("Ret", -1).let { it == 100 || it == 0 }
+    }
+
+    // ---- Качество основного потока (Simplify.Encode → MainFormat.Video) ----
+
+    /** (FPS, BitRate кбит/с, Resolution) основного потока. */
+    suspend fun getEncodeMain(): Triple<Int, Int, String>? {
+        val v = getConfig("Simplify.Encode").optJSONArray("Simplify.Encode")?.optJSONObject(0)
+            ?.optJSONObject("MainFormat")?.optJSONObject("Video") ?: return null
+        return Triple(v.optInt("FPS", 25), v.optInt("BitRate", 2048), v.optString("Resolution", "1080P"))
+    }
+
+    suspend fun setEncodeMain(fps: Int, bitRate: Int): Boolean {
+        val arr = getConfig("Simplify.Encode").optJSONArray("Simplify.Encode") ?: return false
+        val v = arr.optJSONObject(0)?.optJSONObject("MainFormat")?.optJSONObject("Video") ?: return false
+        v.put("FPS", fps.coerceIn(1, 25)).put("BitRate", bitRate)
+        val r = request(MessageIds.CONFIG_SET, JSONObject().put("Name", "Simplify.Encode").put("Simplify.Encode", arr))
+        return r.optInt("Ret", -1).let { it == 100 || it == 0 }
+    }
+
     /** Прочитать один сырой пакет (без разбора JSON): (msgId, тело). */
     private fun recvRaw(): Pair<Int, ByteArray> {
         val inp = input ?: error("not connected")

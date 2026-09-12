@@ -42,7 +42,18 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
     var pirEnabled by remember { mutableStateOf(false) }
     var pirSens by remember { mutableStateOf(0f) }
     var motionEnabled by remember { mutableStateOf(false) }
+    var motionLevel by remember { mutableStateOf(3f) }
+    var humanEnabled by remember { mutableStateOf<Boolean?>(null) }
     var img by remember { mutableStateOf<DvripClient.ImageParam?>(null) }
+    // запись
+    var recordMode by remember { mutableStateOf<String?>(null) } // ClosedRecord/ConfigRecord/ManualRecord
+    var packetLen by remember { mutableStateOf(3f) }
+    // цвет
+    var color by remember { mutableStateOf<DvripClient.VideoColor?>(null) }
+    // качество основного потока
+    var encFps by remember { mutableStateOf<Int?>(null) }
+    var encBitrate by remember { mutableStateOf(2048) }
+    var encRes by remember { mutableStateOf("") }
 
     // helper: одно соединение на операцию
     fun withClient(block: suspend (DvripClient) -> Unit) {
@@ -77,8 +88,12 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
             camTime = runCatching { c.getTime() }.getOrNull() ?: "—"
             camName = runCatching { c.getChannelTitle() }.getOrNull() ?: ""
             runCatching { c.getPir() }.getOrNull()?.let { (en, s) -> pirEnabled = en; pirSens = s.toFloat() }
-            motionEnabled = runCatching { c.getMotionEnabled() }.getOrNull() ?: false
+            runCatching { c.getMotion() }.getOrNull()?.let { (en, lv) -> motionEnabled = en; motionLevel = lv.toFloat() }
+            humanEnabled = runCatching { c.getHumanDetect() }.getOrNull()
             img = runCatching { c.getImageParam() }.getOrNull()
+            runCatching { c.getRecord() }.getOrNull()?.let { (m, pl) -> recordMode = m; packetLen = pl.toFloat() }
+            color = runCatching { c.getVideoColor() }.getOrNull()
+            runCatching { c.getEncodeMain() }.getOrNull()?.let { (f, b, r) -> encFps = f; encBitrate = b; encRes = r }
             loaded = true
             status = "Готово"
         }
@@ -102,10 +117,34 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
         status = if (ok) "PIR: ${if (en) "вкл" else "выкл"}, чувствит. $sens" else "Не удалось изменить PIR"
     }
 
-    fun applyMotion(en: Boolean) = withClient { c ->
-        val ok = c.setMotionEnabled(en)
-        if (ok) motionEnabled = en
-        status = if (ok) "Детекция движения: ${if (en) "вкл" else "выкл"}" else "Не удалось изменить детекцию"
+    fun applyMotion(en: Boolean, level: Int) = withClient { c ->
+        val ok = c.setMotion(en, level)
+        if (ok) { motionEnabled = en; motionLevel = level.toFloat() }
+        status = if (ok) "Детекция движения: ${if (en) "вкл" else "выкл"}, уровень $level" else "Не удалось изменить детекцию"
+    }
+
+    fun applyHuman(en: Boolean) = withClient { c ->
+        val ok = c.setHumanDetect(en)
+        if (ok) humanEnabled = en
+        status = if (ok) "Детекция человека: ${if (en) "вкл" else "выкл"}" else "Не удалось изменить"
+    }
+
+    fun applyRecord(mode: String, pl: Int) = withClient { c ->
+        val ok = c.setRecord(mode, pl)
+        if (ok) { recordMode = mode; packetLen = pl.toFloat() }
+        status = if (ok) "Запись сохранена" else "Не удалось изменить запись"
+    }
+
+    fun applyColor(v: DvripClient.VideoColor) = withClient { c ->
+        val ok = c.setVideoColor(v)
+        if (ok) color = v
+        status = if (ok) "Цвет сохранён" else "Не удалось изменить цвет"
+    }
+
+    fun applyEncode(fps: Int, bitrate: Int) = withClient { c ->
+        val ok = c.setEncodeMain(fps, bitrate)
+        if (ok) { encFps = fps; encBitrate = bitrate }
+        status = if (ok) "Качество сохранено: ${fps}fps / ${bitrate}k" else "Не удалось изменить качество"
     }
 
     fun applyImage(n: DvripClient.ImageParam) = withClient { c ->
@@ -190,9 +229,25 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
 
                 HorizontalDivider()
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Детекция движения (по видео)", Modifier.weight(1f))
+                    Column(Modifier.weight(1f)) {
+                        Text("Детекция движения (по видео)")
+                        Text("Уровень: ${motionLevel.toInt()} (1–6)", style = MaterialTheme.typography.bodySmall)
+                    }
                     Switch(checked = motionEnabled, enabled = loaded && !busy,
-                        onCheckedChange = { applyMotion(it) })
+                        onCheckedChange = { applyMotion(it, motionLevel.toInt()) })
+                }
+                Slider(
+                    value = motionLevel, onValueChange = { motionLevel = it },
+                    onValueChangeFinished = { applyMotion(motionEnabled, motionLevel.toInt()) },
+                    valueRange = 1f..6f, steps = 4, enabled = loaded && !busy && motionEnabled,
+                )
+
+                humanEnabled?.let { he ->
+                    HorizontalDivider()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Детекция человека (AI)", Modifier.weight(1f))
+                        Switch(checked = he, enabled = loaded && !busy, onCheckedChange = { applyHuman(it) })
+                    }
                 }
             }
         }
@@ -228,6 +283,76 @@ fun SettingsScreen(host: String, port: Int, user: String, pass: String, onBack: 
                         listOf("Выкл", "50 Гц", "60 Гц").forEachIndexed { i, lbl ->
                             FilterChip(selected = p.antiFlicker == i, enabled = en,
                                 onClick = { applyImage(p.copy(antiFlicker = i)) }, label = { Text(lbl) })
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Цвет изображения ---
+        Text("Цвет изображения", style = MaterialTheme.typography.titleMedium)
+        ElevatedCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                val c = color
+                val en = loaded && !busy
+                if (c == null) {
+                    Text(if (loaded) "Недоступно на этой камере" else "Загрузка…", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    ColorSlider("Яркость", c.brightness, en) { applyColor(c.copy(brightness = it)) }
+                    ColorSlider("Контраст", c.contrast, en) { applyColor(c.copy(contrast = it)) }
+                    ColorSlider("Насыщенность", c.saturation, en) { applyColor(c.copy(saturation = it)) }
+                    ColorSlider("Оттенок", c.hue, en) { applyColor(c.copy(hue = it)) }
+                }
+            }
+        }
+
+        // --- Запись на SD ---
+        Text("Запись на SD", style = MaterialTheme.typography.titleMedium)
+        ElevatedCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val m = recordMode
+                val en = loaded && !busy
+                if (m == null) {
+                    Text(if (loaded) "Недоступно" else "Загрузка…", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Text("Режим записи", style = MaterialTheme.typography.bodyMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Выкл" to "ClosedRecord", "Расписание" to "ConfigRecord", "Всегда" to "ManualRecord")
+                            .forEach { (lbl, mode) ->
+                                FilterChip(selected = m == mode, enabled = en,
+                                    onClick = { applyRecord(mode, packetLen.toInt()) }, label = { Text(lbl) })
+                            }
+                    }
+                    Text("Длина файла: ${packetLen.toInt()} мин", style = MaterialTheme.typography.bodySmall)
+                    Slider(
+                        value = packetLen, onValueChange = { packetLen = it },
+                        onValueChangeFinished = { applyRecord(m, packetLen.toInt()) },
+                        valueRange = 1f..60f, enabled = en,
+                    )
+                }
+            }
+        }
+
+        // --- Качество основного потока ---
+        Text("Качество${if (encRes.isNotBlank()) " (осн. поток $encRes)" else ""}", style = MaterialTheme.typography.titleMedium)
+        ElevatedCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val f = encFps
+                val en = loaded && !busy
+                if (f == null) {
+                    Text(if (loaded) "Недоступно" else "Загрузка…", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Text("Кадры/с: ${encFps ?: f}", style = MaterialTheme.typography.bodySmall)
+                    Slider(
+                        value = (encFps ?: f).toFloat(), onValueChange = { encFps = it.toInt() },
+                        onValueChangeFinished = { applyEncode(encFps ?: f, encBitrate) },
+                        valueRange = 1f..25f, steps = 23, enabled = en,
+                    )
+                    Text("Битрейт: $encBitrate кбит/с", style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(512, 1024, 2048, 4096).forEach { br ->
+                            FilterChip(selected = encBitrate == br, enabled = en,
+                                onClick = { applyEncode(encFps ?: f, br) }, label = { Text("$br") })
                         }
                     }
                 }
@@ -292,4 +417,15 @@ private fun SwitchRow(label: String, checked: Boolean, enabled: Boolean, onChang
         Text(label, Modifier.weight(1f))
         Switch(checked = checked, enabled = enabled, onCheckedChange = onChange)
     }
+}
+
+/** Слайдер 0..100 с локальным перетаскиванием и применением по отпусканию. */
+@Composable
+private fun ColorSlider(label: String, value: Int, enabled: Boolean, onApply: (Int) -> Unit) {
+    var v by remember(value) { mutableStateOf(value.toFloat()) }
+    Text("$label: ${v.toInt()}", style = MaterialTheme.typography.bodySmall)
+    Slider(
+        value = v, onValueChange = { v = it }, onValueChangeFinished = { onApply(v.toInt()) },
+        valueRange = 0f..100f, enabled = enabled,
+    )
 }
