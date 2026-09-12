@@ -310,6 +310,15 @@ fun LiveScreen(host: String, port: Int, user: String, pass: String, onBack: () -
             }
         }
 
+        // статус (виден вместе с кнопками) — чтобы ошибки не терялись за чёрным экраном
+        if (controls && videoStarted) {
+            Text(
+                status,
+                Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 56.dp),
+                color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.labelSmall,
+            )
+        }
+
         // --- HUD ---
         if (hud && videoStarted) {
             Text(

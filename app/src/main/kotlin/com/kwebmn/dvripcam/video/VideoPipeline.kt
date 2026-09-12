@@ -52,12 +52,16 @@ enum class LatencyMode { LOW, SMOOTH, ADAPTIVE }
 /** Снимок статистики для HUD. */
 data class VideoStats(val fps: Int, val kbps: Int, val bufferedFrames: Int, val latencyMs: Int)
 
+/** Предел адаптивного буфера (кадров). */
+private const val MAX_CAP = 24
+
 /**
- * Декодер H.264 через MediaCodec на Surface с низкой задержкой.
- * - LOW: мелкая очередь, при переполнении дроп до следующего I-кадра (реалтайм).
- * - SMOOTH: буфер побольше, при переполнении дроп самого старого (плавнее).
- * - ADAPTIVE: старт как LOW, при недогрузах наращивает буфер, при простое ужимает.
- * Переконфигурируется при смене SPS (переключение HD/SD на лету).
+ * Декодер H.264 через MediaCodec на Surface.
+ * Размер очереди задаёт компромисс задержка/плавность: LOW=4, SMOOTH=24,
+ * ADAPTIVE стартует с 8 и растёт при переполнении.
+ * При переполнении очередь чистится и ждём следующий I-кадр (выкидывать кадры
+ * из середины GOP нельзя — будет «каша»).
+ * Кодек пересоздаётся только при реальной смене разрешения (HD<->SD).
  */
 class H264Decoder(
     private val surface: Surface,
@@ -70,15 +74,14 @@ class H264Decoder(
     private var codec: MediaCodec? = null
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
-    private var configuredSps: ByteArray? = null
+    private var configuredDims: Pair<Int, Int>? = null
     private val queue = LinkedBlockingDeque<ByteArray>()
     @Volatile private var running = false
     @Volatile private var needKeyframe = true
     private var thread: Thread? = null
 
-    // адаптивный размер буфера (в кадрах)
-    @Volatile private var adaptiveCap = 2
-    @Volatile private var underruns = 0
+    // адаптивный размер буфера (в кадрах): растёт при переполнении
+    @Volatile private var adaptiveCap = 8
 
     // статистика
     @Volatile private var inBytes = 0L
@@ -87,15 +90,18 @@ class H264Decoder(
     private var lastFps = 0
 
     private fun cap(): Int = when (mode) {
-        LatencyMode.LOW -> 2
-        LatencyMode.SMOOTH -> 12
+        LatencyMode.LOW -> 4
+        LatencyMode.SMOOTH -> 24
         LatencyMode.ADAPTIVE -> adaptiveCap
     }
 
     fun submitNal(nal: ByteArray) {
         when (nalType(nal)) {
-            7 -> { // SPS: смена разрешения -> переконфиг
-                if (configuredSps != null && !nal.contentEquals(configuredSps)) reset()
+            7 -> { // SPS: переконфиг ТОЛЬКО при реальной смене разрешения (HD<->SD),
+                   // а не при любом отличии байтов — иначе кодек пересоздавался бы каждый GOP.
+                val dims = SpsParser.dimensions(nal)
+                val cur = configuredDims
+                if (codec != null && dims != null && cur != null && dims != cur) reset()
                 sps = nal; tryConfigure()
             }
             8 -> { pps = nal; tryConfigure() }
@@ -104,46 +110,59 @@ class H264Decoder(
     }
 
     private fun enqueue(nal: ByteArray) {
-        val c = codec ?: return
+        codec ?: return
         val t = nalType(nal)
         if (needKeyframe && t != 5) return       // ждём I-кадр после дропа/старта
         if (t == 5) needKeyframe = false
         inBytes += nal.size
-        val limit = cap()
-        if (queue.size >= limit) {
-            if (mode == LatencyMode.LOW) {
-                queue.clear()
-                if (t != 5) { needKeyframe = true; return } // ждём следующий I-кадр
-            } else {
-                queue.pollFirst() // дроп самого старого
-            }
+        if (queue.size >= cap()) {
+            // Переполнение = декодер не успевает. Выбрасывать кадры из середины GOP нельзя
+            // (получим «кашу»), поэтому чистим очередь и ждём следующий I-кадр.
+            queue.clear()
+            if (mode == LatencyMode.ADAPTIVE && adaptiveCap < MAX_CAP) adaptiveCap += 2
+            if (t != 5) { needKeyframe = true; return }
         }
         queue.offerLast(nal)
+    }
+
+    /**
+     * Создать и запустить кодек. [lowLatency] добавляет KEY_LOW_LATENCY — его понимают
+     * не все декодеры, поэтому вызывающий делает фолбэк без него.
+     */
+    private fun createCodec(w: Int, h: Int, lowLatency: Boolean): MediaCodec? {
+        var c: MediaCodec? = null
+        return try {
+            val fmt = MediaFormat.createVideoFormat("video/avc", w, h)
+            fmt.setByteBuffer("csd-0", ByteBuffer.wrap(sps))
+            fmt.setByteBuffer("csd-1", ByteBuffer.wrap(pps))
+            if (lowLatency && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                fmt.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            }
+            c = MediaCodec.createDecoderByType("video/avc")
+            c.configure(fmt, surface, null, 0)
+            c.start()
+            c
+        } catch (e: Exception) {
+            runCatching { c?.release() }
+            null
+        }
     }
 
     @Synchronized
     private fun tryConfigure() {
         if (codec != null || sps == null || pps == null) return
-        try {
-            val (w, h) = SpsParser.dimensions(sps!!) ?: fallbackSize
-            onVideoSize(w, h)
-            val fmt = MediaFormat.createVideoFormat("video/avc", w, h)
-            fmt.setByteBuffer("csd-0", ByteBuffer.wrap(sps))
-            fmt.setByteBuffer("csd-1", ByteBuffer.wrap(pps))
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                fmt.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-            }
-            val c = MediaCodec.createDecoderByType("video/avc")
-            c.configure(fmt, surface, null, 0)
-            c.start()
-            codec = c
-            configuredSps = sps
-            running = true
-            needKeyframe = true
-            thread = Thread { drainLoop(c) }.apply { isDaemon = true; start() }
-        } catch (e: Exception) {
-            onError("Декодер: ${e.message}")
-        }
+        val (w, h) = SpsParser.dimensions(sps!!) ?: fallbackSize
+        // Сначала пробуем low-latency, при отказе — обычную конфигурацию.
+        val c = createCodec(w, h, lowLatency = true) ?: createCodec(w, h, lowLatency = false)
+        if (c == null) { onError("Декодер не запустился (${w}x$h)"); return }
+        // ВАЖНО: сообщаем размер только после успешного старта — иначе UI спрячет
+        // спиннер и текст ошибки, и пользователь увидит чёрный экран без причины.
+        onVideoSize(w, h)
+        codec = c
+        configuredDims = w to h
+        running = true
+        needKeyframe = true
+        thread = Thread { drainLoop(c) }.apply { isDaemon = true; start() }
     }
 
     private fun drainLoop(c: MediaCodec) {
@@ -158,10 +177,6 @@ class H264Decoder(
                         ib.clear(); ib.put(nal)
                         c.queueInputBuffer(inIdx, 0, nal.size, System.nanoTime() / 1000, 0)
                     }
-                } else if (mode == LatencyMode.ADAPTIVE) {
-                    // очередь пуста при рендере — сеть не поспевает, наращиваем буфер
-                    underruns++
-                    if (underruns >= 3 && adaptiveCap < 12) { adaptiveCap++; underruns = 0 }
                 }
                 var outIdx = c.dequeueOutputBuffer(info, 0)
                 while (outIdx >= 0) {
@@ -198,7 +213,7 @@ class H264Decoder(
         runCatching { thread?.join(200) }
         runCatching { codec?.stop() }
         runCatching { codec?.release() }
-        codec = null; configuredSps = null; sps = null; pps = null
+        codec = null; configuredDims = null; sps = null; pps = null
         queue.clear(); needKeyframe = true
     }
 
