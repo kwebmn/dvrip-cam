@@ -451,6 +451,36 @@ class DvripClient(
         }
     }
 
+    // ---- Плейбэк по времени (ByTime) с перемоткой ----
+
+    private fun pbParam(start: String, end: String) = JSONObject()
+        .put("PlayMode", "ByTime").put("StreamType", 0).put("Value", 0).put("TransMode", "TCP")
+        .put("StartTime", start).put("EndTime", end)
+
+    /** Начать плейбэк по времени: Claim + DownloadStart. Цикл чтения ведёт вызывающий (readRawPacket). */
+    suspend fun playbackStart(start: String, end: String) = withContext(Dispatchers.IO) {
+        request(
+            MessageIds.PLAYBACK_CLAIM,
+            JSONObject().put("Name", "OPPlayBack").put("OPPlayBack",
+                JSONObject().put("Action", "Claim").put("StartTime", start).put("EndTime", end).put("Parameter", pbParam(start, end))),
+        )
+        frame(
+            MessageIds.PLAYBACK_DOWNLOAD_START,
+            JSONObject().put("Name", "OPPlayBack").put("SessionID", sessionHex).put("OPPlayBack",
+                JSONObject().put("Action", "DownloadStart").put("StartTime", start).put("EndTime", end).put("Parameter", pbParam(start, end))),
+        )
+    }
+
+    /** Перемотка на время [start] (fire-and-forget): Stop + Claim + DownloadStart. Цикл чтения продолжается. */
+    suspend fun playbackSeek(start: String, end: String) = withContext(Dispatchers.IO) {
+        frame(MessageIds.PLAYBACK_DOWNLOAD_START, JSONObject().put("Name", "OPPlayBack").put("SessionID", sessionHex)
+            .put("OPPlayBack", JSONObject().put("Action", "Stop")))
+        frame(MessageIds.PLAYBACK_CLAIM, JSONObject().put("Name", "OPPlayBack").put("SessionID", sessionHex)
+            .put("OPPlayBack", JSONObject().put("Action", "Claim").put("StartTime", start).put("EndTime", end).put("Parameter", pbParam(start, end))))
+        frame(MessageIds.PLAYBACK_DOWNLOAD_START, JSONObject().put("Name", "OPPlayBack").put("SessionID", sessionHex)
+            .put("OPPlayBack", JSONObject().put("Action", "DownloadStart").put("StartTime", start).put("EndTime", end).put("Parameter", pbParam(start, end))))
+    }
+
     /** Отправить сырой (не-JSON) кадр: заголовок + тело как есть. Для talk-аудио. */
     private fun frameRaw(msgId: Int, body: ByteArray) {
         val header = DvripHeader.build(sessionId, seq++, msgId, body.size)
